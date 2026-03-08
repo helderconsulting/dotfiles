@@ -1,0 +1,400 @@
+{
+  "Node: console.log": {
+    "prefix": "console_log",
+    "body": "console.log(${1});",
+    "description": "console.log"
+  },
+  "Node: console.error": {
+    "prefix": "console_err",
+    "body": "console.error(${1});",
+    "description": "console.error"
+  },
+  "Node: import named": {
+    "prefix": "import",
+    "body": "import { ${1:name} } from '${2:module}';",
+    "description": "ESM named import"
+  },
+  "TS: import type": {
+    "prefix": "import_type",
+    "body": "import type { ${1:Type} } from '${2:module}';",
+    "description": "Type-only import"
+  },
+  "TS: type alias": {
+    "prefix": "type",
+    "body": "type ${1:Name} = ${2:Type};",
+    "description": "Type alias"
+  },
+  "TS: union type": {
+    "prefix": "union",
+    "body": "type ${1:Name} = ${2:A} | ${3:B};",
+    "description": "Union type"
+  },
+  "TS: interface": {
+    "prefix": "interface",
+    "body": ["interface ${1:Name} {", "\t${2:prop}: ${3:type};", "}"],
+    "description": "Interface"
+  },
+  "TS: interface generic": {
+    "prefix": "interface_generic",
+    "body": ["interface ${1:Name}<${2:T}> {", "\t${3:prop}: ${4:T};", "}"],
+    "description": "Generic interface"
+  },
+  "TS: enum": {
+    "prefix": "enum",
+    "body": ["enum ${1:Name} {", "\t${2:Member} = '${3:value}',", "}"],
+    "description": "Enum"
+  },
+  "TS: Promise": {
+    "prefix": "promise",
+    "body": "Promise<${1:Type}>",
+    "description": "Promise generic"
+  },
+  "TS: Array": {
+    "prefix": "array",
+    "body": "Array<${1:Type}>",
+    "description": "Array generic"
+  },
+  "TS: ReadonlyArray": {
+    "prefix": "readonly_array",
+    "body": "ReadonlyArray<${1:Type}>",
+    "description": "ReadonlyArray generic"
+  },
+  "TS: Set": {
+    "prefix": "set",
+    "body": "Set<${1:Type}>",
+    "description": "Set generic"
+  },
+  "TS: Map": {
+    "prefix": "map_generic",
+    "body": "Map<${1:Key}, ${2:Value}>",
+    "description": "Map generic"
+  },
+  "TS: Tuple": {
+    "prefix": "tuple",
+    "body": "[${1:T1}, ${2:T2}]",
+    "description": "Tuple type"
+  },
+  "TS: Partial": {
+    "prefix": "partial",
+    "body": "Partial<${1:Type}>",
+    "description": "Utility type Partial"
+  },
+  "TS: Required": {
+    "prefix": "required",
+    "body": "Required<${1:Type}>",
+    "description": "Utility type Required"
+  },
+  "TS: Readonly": {
+    "prefix": "readonly",
+    "body": "Readonly<${1:Type}>",
+    "description": "Utility type Readonly"
+  },
+  "TS: Pick": {
+    "prefix": "pick",
+    "body": "Pick<${1:Type}, ${2:'keys'}>",
+    "description": "Utility type Pick"
+  },
+  "TS: Omit": {
+    "prefix": "omit",
+    "body": "Omit<${1:Type}, ${2:'keys'}>",
+    "description": "Utility type Omit"
+  },
+  "TS: Record": {
+    "prefix": "record",
+    "body": "Record<${1:Key}, ${2:Type}>",
+    "description": "Utility type Record"
+  },
+  "TS: ReturnType": {
+    "prefix": "ret",
+    "body": "ReturnType<typeof ${1:fn}>",
+    "description": "Utility type ReturnType"
+  },
+  "TS: Parameters": {
+    "prefix": "params",
+    "body": "Parameters<typeof ${1:fn}>",
+    "description": "Utility type Parameters"
+  },
+  "TS: Exclude": {
+    "prefix": "exclude",
+    "body": "Exclude<${1:Union}, ${2:Excluded}>",
+    "description": "Utility type Exclude"
+  },
+  "TS: Extract": {
+    "prefix": "extract",
+    "body": "Extract<${1:Union}, ${2:Included}>",
+    "description": "Utility type Extract"
+  },
+  "TS: NonNullable": {
+    "prefix": "nonnull",
+    "body": "NonNullable<${1:Type}>",
+    "description": "Utility type NonNullable"
+  },
+  "TS: Awaited": {
+    "prefix": "awaited",
+    "body": "Awaited<${1:Type}>",
+    "description": "Utility type Awaited"
+  },
+  "TS: arrow function": {
+    "prefix": ["fn"],
+    "body": "const ${1:name} = (${2:args}) => {\n\t${3}\n};",
+    "description": "Arrow function"
+  },
+  "TS: arrow function async": {
+    "prefix": ["fn_async"],
+    "body": "const ${1:name} = async (${2:args}) => {\n\t${3}\n};",
+    "description": "Async arrow function"
+  },
+  "TS: arrow function inline": {
+    "prefix": ["fn_inline"],
+    "body": "(${1:args}) => {${\n\t${2}\n}};",
+    "description": "Arrow function inline"
+  },
+  "TS: class": {
+    "prefix": "class",
+    "body": [
+      "class ${1:Name} {",
+      "\tconstructor(${2:args}) {",
+      "\t\t${3}",
+      "\t}",
+      "",
+      "\t${4:method}(${5:args}): ${6:void} {",
+      "\t\t${7}",
+      "\t}",
+      "}"
+    ],
+    "description": "Class with constructor and method"
+  },
+  "TS: constructor": {
+    "prefix": "ctor",
+    "body": ["constructor(${1:args}) {", "\t${2}", "}"],
+    "description": "Constructor"
+  },
+  "TS: method": {
+    "prefix": "method",
+    "body": ["${1:name}(${2:args}): ${3:void} {", "\t${4}", "}"],
+    "description": "Class method"
+  },
+  "TS: for...of": {
+    "prefix": "forof",
+    "body": ["for (const ${1:item} of ${2:iterable}) {", "\t${3}", "}"],
+    "description": "for...of loop"
+  },
+  "TS: for...in": {
+    "prefix": "forin",
+    "body": ["for (const ${1:key} in ${2:object}) {", "\t${3}", "}"],
+    "description": "for...in loop"
+  },
+  "TS: for loop": {
+    "prefix": "for",
+    "body": [
+      "for (let ${1:i} = 0; ${1:i} < ${2:count}; ${1:i}++) {",
+      "\t${3}",
+      "}"
+    ],
+    "description": "Classic for loop"
+  },
+  "TS: while loop": {
+    "prefix": "while",
+    "body": ["while (${1:condition}) {", "\t${2}", "}"],
+    "description": "While loop"
+  },
+  "Node: export named": {
+    "prefix": "export",
+    "body": "export { ${1:name} };",
+    "description": "Named export"
+  },
+  "Node: export default": {
+    "prefix": "export_default",
+    "body": "export default ${1:name};",
+    "description": "Default export"
+  },
+  "TS: map": {
+    "prefix": "map",
+    "body": "${1:array}.map((${2:item}) => ${3});",
+    "description": "Array.map"
+  },
+  "TS: filter": {
+    "prefix": "filter",
+    "body": "${1:array}.filter((${2:item}) => ${3});",
+    "description": "Array.filter"
+  },
+  "TS: reduce": {
+    "prefix": "reduce",
+    "body": "${1:array}.reduce((${2:acc}, ${3:item}) => ${4}, ${5:initial});",
+    "description": "Array.reduce"
+  },
+  "TS: forEach": {
+    "prefix": "foreach",
+    "body": "${1:array}.forEach((${2:item}) => {\n\t${3}\n});",
+    "description": "Array.forEach"
+  },
+  "TS: if": {
+    "prefix": "if",
+    "body": "if (${1:condition}) {\n\t${2}\n}",
+    "description": "If statement"
+  },
+  "TS: if/else": {
+    "prefix": "ife",
+    "body": "if (${1:condition}) {\n\t${2}\n} else {\n\t${3}\n}",
+    "description": "If/else statement"
+  },
+  "TS: switch": {
+    "prefix": "switch",
+    "body": [
+      "switch (${1:expression}) {",
+      "\tcase ${2:value}:",
+      "\t\t${3}",
+      "\t\tbreak;",
+      "\tdefault:",
+      "\t\t${4}",
+      "}"
+    ],
+    "description": "Switch statement"
+  },
+  "TS: try/catch unknown": {
+    "prefix": "try_catch",
+    "body": [
+      "try {",
+      "\t${1}",
+      "} catch (${2:err}: unknown) {",
+      "\tif (${2:err} instanceof Error) {",
+      "\t\t${3:console.error(${2:err}.message);}",
+      "\t} else {",
+      "\t\t${4:console.error(${2:err});}",
+      "\t}",
+      "}"
+    ],
+    "description": "Try/catch with unknown"
+  },
+  "TS: async try/catch": {
+    "prefix": "try_async",
+    "body": [
+      "try {",
+      "\t${1}",
+      "} catch (${2:err}: unknown) {",
+      "\tif (${2:err} instanceof Error) {",
+      "\t\t${3:console.error(${2:err}.message);}",
+      "\t} else {",
+      "\t\t${4:console.error(${2:err});}",
+      "\t}",
+      "}"
+    ],
+    "description": "Async try/catch"
+  },
+  "TS: invariant": {
+    "prefix": "invariant",
+    "body": [
+      "if (!${1:condition}) {",
+      "\tthrow new Error('${2:message}');",
+      "}"
+    ],
+    "description": "Invariant check"
+  },
+  "TS: throw error": {
+    "prefix": "throw",
+    "body": "throw new Error('${1:message}');",
+    "description": "Throw Error"
+  },
+  "TS: Builder pattern": {
+    "prefix": "builder",
+    "body": [
+      "class ${1:Builder} {",
+      "\twith${2:Prop}(${3:value}: ${4:Type}) {",
+      "\t\treturn this;",
+      "\t}",
+      "",
+      "\tbuild(): ${5:Result} {",
+      "\t\treturn ${6:result};",
+      "\t}",
+      "}"
+    ],
+    "description": "Builder pattern"
+  },
+  "TS: Strategy pattern": {
+    "prefix": "strategy",
+    "body": [
+      "interface ${1:Strategy} {",
+      "\texecute(${2:input}: ${3:Type}): ${4:Result};",
+      "}",
+      "",
+      "class ${5:ConcreteStrategy} implements ${1:Strategy} {",
+      "\texecute(${2:input}: ${3:Type}): ${4:Result} {",
+      "\t\t${6}",
+      "\t}",
+      "}"
+    ],
+    "description": "Strategy pattern"
+  },
+  "TS: Factory pattern (simple)": {
+    "prefix": "factory_simple",
+    "body": [
+      "const create${1:Product} = (${2:type}: ${3:string}): ${1:Product} => {",
+      "\t${4}",
+      "};"
+    ],
+    "description": "Simple factory (function)"
+  },
+  "TS: Factory Method pattern": {
+    "prefix": "factory_method",
+    "body": [
+      "abstract class ${1:Creator} {",
+      "\tabstract create(): ${2:Product};",
+      "}",
+      "",
+      "class ${3:ConcreteCreator} extends ${1:Creator} {",
+      "\tcreate(): ${2:Product} {",
+      "\t\t${4}",
+      "\t}",
+      "}"
+    ],
+    "description": "Factory Method pattern"
+  },
+  "TS: Abstract Factory pattern": {
+    "prefix": "factory_abstract",
+    "body": [
+      "interface ${1:Factory} {",
+      "\tcreateA(): ${2:ProductA};",
+      "\tcreateB(): ${3:ProductB};",
+      "}",
+      "",
+      "class ${4:ConcreteFactory} implements ${1:Factory} {",
+      "\tcreateA(): ${2:ProductA} {",
+      "\t\t${5}",
+      "\t}",
+      "\tcreateB(): ${3:ProductB} {",
+      "\t\t${6}",
+      "\t}",
+      "}"
+    ],
+    "description": "Abstract Factory pattern"
+  },
+  "TS: Static Factory pattern": {
+    "prefix": "factory_static",
+    "body": [
+      "class ${1:Product} {",
+      "\tprivate constructor() {}",
+      "",
+      "\tstatic create(): ${1:Product} {",
+      "\t\t${2}",
+      "\t}",
+      "}"
+    ],
+    "description": "Static Factory pattern"
+  },
+  "TS: Factory Registry pattern": {
+    "prefix": "factory_registry",
+    "body": [
+      "type ${1:FactoryFn} = () => ${2:Product};",
+      "const ${3:registry} = new Map<string, ${1:FactoryFn}>();",
+      "",
+      "const register${2:Product} = (key: string, factory: ${1:FactoryFn}) => {",
+      "\t${3:registry}.set(key, factory);",
+      "};",
+      "",
+      "const create${2:Product} = (key: string): ${2:Product} => {",
+      "\t${4}",
+      "};"
+    ],
+    "description": "Factory registry (map of creators)"
+  }
+}
