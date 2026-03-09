@@ -1,33 +1,36 @@
-vim.pack.add({ "https://github.com/ThePrimeagen/99" })
+vim.pack.add({ "https://github.com/sudo-tee/opencode.nvim" })
 
-local agent_orchestrator = require("99")
-local picker = require("99.extensions.fzf_lua")
+local agent_orchestrator = require("opencode")
 
 agent_orchestrator.setup({
-	provider = agent_orchestrator.Providers.GeminiCLIProvider,
-	auto_add_skills = true,
+	preferred_picker = "fzf",
+	preferred_completion = "blink",
+	keymap = {
+		editor = {
+			["<leader>aa"] = { "add_visual_selection", mode = { "v" }, desc = "Agentic Add visual selection" },
+
+			["<leader>as"] = { "select_session", desc = "Agentic Session select" },
+			["<leader>an"] = { "open_input_new_session", desc = "Agentic New session" },
+			["<leader>ar"] = { "rename_session", desc = "Agentic Rename session" },
+			["<leader>ah"] = { "share", desc = "Agentic Share session" },
+
+			["<leader>ac"] = { "cancel", desc = "Agentic Cancel requests" },
+			["<leader>ao"] = { "toggle", desc = "Agentic Open/Toggle" },
+			["<leader>at"] = { "timeline", desc = "Agentic Timeline" },
+			["<leader>ai"] = { "initialize", desc = "Agentic Initialize" },
+			["<leader>af"] = { "search", desc = "Agentic Find/Search" },
+			["<leader>aq"] = { "quick_chat", desc = "Agentic Quick chat" },
+			["<leader>ad"] = { "diff_open", desc = "Agentic Diff open" },
+
+			["<leader>am"] = { "configure_variant", desc = "Agentic Model/Variant" },
+			["<leader>ap"] = { "configure_provider", desc = "Agentic Provider" },
+
+			["<leader>aw"] = {
+				function()
+					agent_orchestrator.Extensions.Worker.set_work()
+				end,
+				desc = "Agentic Work set",
+			},
+		},
+	},
 })
-
-vim.keymap.set("v", "<leader>a", function()
-	agent_orchestrator.visual()
-end, { desc = "agentic visual selection" })
-
-vim.keymap.set("n", "<leader>aw", function()
-	agent_orchestrator.Extensions.Worker.set_work()
-end, { desc = "set work for the project" })
-
-vim.keymap.set("n", "<leader>as", function()
-	agent_orchestrator.stop_all_requests()
-end, { desc = "stop all requests" })
-
-vim.keymap.set("n", "<leader>af", function()
-	agent_orchestrator.search()
-end, { desc = "search the codebase with a prompt" })
-
-vim.keymap.set("n", "<leader>am", function()
-	picker.select_model()
-end, { desc = "select a different model" })
-
-vim.keymap.set("n", "<leader>ap", function()
-	picker.select_provider()
-end, { desc = "select another provider" })
