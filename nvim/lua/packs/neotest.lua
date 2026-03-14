@@ -8,9 +8,11 @@ neotest.setup({
 	adapters = {
 		require("rustaceanvim.neotest"),
 		require("neotest-jest")({
+			isTestFile = function(path)
+				return path:match("%.e2e.ts$") or path:match("%.spec.ts$")
+			end,
 			jestConfigFile = function(file)
-				if file:find("/packages/") or file:find("/libs/") then
-					-- Matches "some/path/" in "some/path/src/"
+				if file:find("/packages/") or file:find("/libs/") or file:find("/apps/") then
 					local match = file:match("(.*/[^/]+/)src")
 
 					if match then
