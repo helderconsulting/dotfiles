@@ -23,7 +23,7 @@ vim.keymap.set({ "n" }, "<C-space>a", function()
 	end
 end, { desc = "show code actions" })
 
-vim.keymap.set("n", "<leader>q", ":bd<cr>", { desc = "close buffer" })
+vim.keymap.set("n", "<leader>c", ":bd<cr>", { desc = "close buffer" })
 vim.keymap.set("n", "<leader>W", ":wa<cr>", { desc = "save all" })
 vim.keymap.set("n", "<leader>w", ":w<cr>", { desc = "save file" })
 vim.keymap.set("n", "<A-(>", ":bp<cr>", { desc = "previous buffer" })
