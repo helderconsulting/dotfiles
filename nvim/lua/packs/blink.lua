@@ -3,6 +3,9 @@ vim.pack.add({
 })
 
 require("blink.cmp").setup({
+	enabled = function()
+		return not vim.tbl_contains({ "AgenticInput" }, vim.bo.filetype)
+	end,
 	signature = {
 		enabled = true,
 		trigger = {
@@ -24,9 +27,18 @@ require("blink.cmp").setup({
 	},
 	sources = {
 		default = { "lsp", "path", "snippets", "buffer" },
+		per_filetype = {
+			sql = { "snippets", "dadbod", "buffer" },
+			mysql = { "snippets", "dadbod", "buffer" },
+			plsql = { "snippets", "dadbod", "buffer" },
+			mongodb = { "snippets", "dadbod", "buffer" },
+		},
 	},
 	providers = {
-		dadbod = { name = "DadBod", module = "vim_dadbod_completion.blink" },
+		dadbod = {
+			name = "DadBod",
+			module = "vim_dadbod_completion.blink",
+		},
 	},
 	fuzzy = { implementation = "prefer_rust_with_warning" },
 })
