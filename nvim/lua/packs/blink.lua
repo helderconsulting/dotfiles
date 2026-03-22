@@ -3,6 +3,9 @@ vim.pack.add({
 })
 
 require("blink.cmp").setup({
+	enabled = function()
+		return not vim.tbl_contains({ "gitcommit", "NeogitCommitMessage" }, vim.bo.filetype)
+	end,
 	signature = {
 		enabled = true,
 		window = { border = "none" },
