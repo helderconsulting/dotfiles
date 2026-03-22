@@ -25,6 +25,9 @@ vim.opt.undofile = true
 vim.opt.hlsearch = false
 vim.opt.incsearch = true
 
+vim.opt.shortmess:append("sIca")
+vim.opt.cmdheight = 0
+
 vim.opt.updatetime = 50
 vim.opt.timeoutlen = 50
 vim.opt.termguicolors = true
