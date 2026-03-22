@@ -41,7 +41,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
 })
 
 local insert_group = vim.api.nvim_create_augroup("OnInsert", { clear = true })
-vim.api.nvim_create_autocmd("InsertEnter", {
+vim.api.nvim_create_autocmd({ "InsertEnter", "CmdlineEnter" }, {
 	pattern = "*",
 	group = insert_group,
 	once = true,
