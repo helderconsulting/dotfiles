@@ -16,6 +16,11 @@ if ok_lualine then
 			} },
 			lualine_x = {
 				{
+					function()
+						return vim.lsp.status()
+					end,
+				},
+				{
 					"diagnostics",
 				},
 			},

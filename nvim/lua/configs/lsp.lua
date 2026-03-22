@@ -4,6 +4,11 @@ vim.api.nvim_create_autocmd("LspAttach", {
 		local client = vim.lsp.get_client_by_id(args.data.client_id)
 		if client then
 			client.server_capabilities.semanticTokensProvider = nil
+			if client.name == "typescript_ls" or client.name == "vtsls" then
+				client.server_capabilities.documentFormattingProvider = false
+				client.server_capabilities.documentRangeFormattingProvider = false
+			end
+
 			if vim.g.completion_mode == "native" and client:supports_method("textDocument/completion") then
 				vim.lsp.completion.enable(true, client.id, args.buf, { autotrigger = true })
 			end
@@ -23,6 +28,12 @@ vim.api.nvim_create_autocmd("LspAttach", {
 				{ desc = "go to type definition", buffer = args.buf }
 			)
 		end
+	end,
+})
+
+vim.api.nvim_create_autocmd("LspProgress", {
+	callback = function()
+		vim.cmd.redrawstatus()
 	end,
 })
 

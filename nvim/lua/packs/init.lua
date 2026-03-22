@@ -37,7 +37,6 @@ vim.api.nvim_create_autocmd("VimEnter", {
 		require("packs.git")
 		require("packs.neotest")
 		require("packs.paste")
-		require("packs.agent_orchestrator")
 	end,
 })
 
