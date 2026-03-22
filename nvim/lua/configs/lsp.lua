@@ -9,6 +9,10 @@ vim.api.nvim_create_autocmd("LspAttach", {
 				client.server_capabilities.documentRangeFormattingProvider = false
 			end
 
+			if client:supports_method("textDocument/inlayHint") then
+				vim.lsp.inlay_hint.enable(true, { bufnr = args.buf })
+			end
+
 			if vim.g.completion_mode == "native" and client:supports_method("textDocument/completion") then
 				vim.lsp.completion.enable(true, client.id, args.buf, { autotrigger = true })
 			end
@@ -37,6 +41,12 @@ vim.api.nvim_create_autocmd("LspProgress", {
 	end,
 })
 
+local capabilities = vim.lsp.protocol.make_client_capabilities()
+local ok_blink, blink = pcall(require, "blink.cmp")
+if ok_blink then
+	capabilities = blink.get_lsp_capabilities(capabilities)
+end
+
 vim.lsp.enable({
 	"c_ls",
 	"lua_ls",
@@ -44,4 +54,5 @@ vim.lsp.enable({
 	"typescript_ls",
 	"eslint_ls",
 	"yaml_ls",
-})
+}, { capabilities = capabilities })
+

@@ -3,42 +3,48 @@ vim.pack.add({
 })
 
 require("blink.cmp").setup({
-	enabled = function()
-		return not vim.tbl_contains({ "AgenticInput" }, vim.bo.filetype)
-	end,
 	signature = {
 		enabled = true,
-		trigger = {
-			enabled = true,
-			show_on_keyword = false,
-			blocked_trigger_characters = {},
-			blocked_retrigger_characters = {},
-			show_on_trigger_character = true,
-			show_on_insert = true,
-			show_on_insert_on_trigger_character = true,
-		},
+		window = { border = "none" },
 	},
-	keymap = { preset = "super-tab" },
+	keymap = {
+		preset = "super-tab",
+		["<C-space>"] = { "show", "show_documentation", "hide_documentation" },
+	},
 	appearance = {
 		use_nvim_cmp_as_default = false,
+		nerd_font_variant = "mono",
 	},
 	completion = {
-		documentation = { auto_show = false },
+		documentation = {
+			auto_show = false,
+			window = { border = "none" },
+		},
+		ghost_text = { enabled = true },
+		menu = {
+			border = "none",
+			draw = {
+				columns = { { "label", "label_description", gap = 1 } },
+			},
+		},
 	},
 	sources = {
 		default = { "lsp", "path", "snippets", "buffer" },
-		per_filetype = {
-			sql = { "snippets", "dadbod", "buffer" },
-			mysql = { "snippets", "dadbod", "buffer" },
-			plsql = { "snippets", "dadbod", "buffer" },
-			mongodb = { "snippets", "dadbod", "buffer" },
-		},
 	},
-	providers = {
-		dadbod = {
-			name = "DadBod",
-			module = "vim_dadbod_completion.blink",
-		},
+	cmdline = {
+		enabled = true,
+		keymap = { preset = "super-tab" },
+		sources = function()
+			local type = vim.fn.getcmdtype()
+			if type == "/" or type == "?" then
+				return { "buffer" }
+			end
+			if type == ":" then
+				return { "cmdline" }
+			end
+			return {}
+		end,
+		completion = { menu = { auto_show = true } },
 	},
 	fuzzy = { implementation = "prefer_rust_with_warning" },
 })

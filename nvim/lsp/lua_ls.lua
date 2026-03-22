@@ -15,7 +15,7 @@ return {
 			format = { enable = false },
 			codeLens = { enable = true },
 			hint = {
-				enable = true,
+				enable = false,
 				arrayIndex = "Disable",
 			},
 			telemetry = {
