@@ -23,7 +23,7 @@ require("blink.cmp").setup({
 			auto_show = false,
 			window = { border = "none" },
 		},
-		ghost_text = { enabled = true },
+		ghost_text = { enabled = false },
 		menu = {
 			border = "none",
 			draw = {
