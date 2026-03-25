@@ -70,6 +70,19 @@ for _, language in ipairs({ "typescript", "javascript" }) do
 			cwd = "${workspaceFolder}",
 			restart = true,
 		},
+		{
+			type = "pwa-node",
+			request = "attach",
+			name = "Attach to Docker (NestJS/Nx)",
+			address = "localhost",
+			port = 9229,
+			pathMappings = {
+				["/app"] = "${workspaceFolder}",
+			},
+			sourceMaps = true,
+			restart = true,
+			skipFiles = { "<node_internals>/**/*.js" },
+		},
 	}
 end
 
