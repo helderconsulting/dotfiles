@@ -4,16 +4,16 @@ vim.pack.add({
 
 local fzf = require("fzf-lua")
 fzf.setup({
-  files = {
-    fd_opts = "--type f --hidden --follow --exclude .git",
-    rg_opts = "--files --hidden --follow -g '!.git'",
-  },
-  grep = {
-    rg_opts = "--hidden --follow --smart-case --no-heading --line-number --column --color=always -g '!.git' -g '!node_modules/*' -g '!dist/*' -g '!.next/*' -g '!build/*' -g '!target/*' -g '!*.lock'",
-  },
-  file_ignore_patterns = {
-    "node_modules/",
-    "dist/",
+	files = {
+		fd_opts = "--type f --hidden --follow --exclude .git",
+		rg_opts = "--files --hidden --follow -g '!.git'",
+	},
+	grep = {
+		rg_opts = "--hidden --follow --smart-case --no-heading --line-number --column --color=always -g '!.git' -g '!node_modules/*' -g '!dist/*' -g '!.next/*' -g '!build/*' -g '!target/*' -g '!*.lock'",
+	},
+	file_ignore_patterns = {
+		"node_modules/",
+		"dist/",
 		".next/",
 		".git/",
 		".gitlab/",
@@ -22,7 +22,7 @@ fzf.setup({
 		"package-lock.json",
 		"pnpm-lock.yaml",
 		"yarn.lock",
-  },
+	},
 	winopts = {
 		height = 0.40,
 		width = 1.00,
@@ -41,16 +41,33 @@ fzf.setup({
 			})
 		end,
 		preview = {
-
 			border = "none",
 			hidden = "nohidden",
 		},
 	},
+	hls = {
+		-- Give the cwd header the same LED panel treatment as the wezterm directory pill
+		fzf_header = { fg = "#77DD77", bg = "#0F2A0F", bold = true },
+	},
 	fzf_colors = {
-		["bg"] = { "bg", "Normal" },
-		["bg+"] = { "bg", "CursorLine" }, -- Highlighted line background
-
-		["pointer"] = { "bg", "CursorLine" }, -- Matches the selection bar
+		-- mfd-hud palette (all hardcoded hex — group refs not reliable in fzf):
+		--   bg=#060C06  fg=#55BB55  dim=#2E5C2E  bright=#77DD77  led-bg=#0F2A0F
+		["fg"] = "#55BB55", -- regular entry text
+		["fg+"] = "#77DD77", -- selected entry text — bump to bright
+		["bg"] = "#060C06", -- main background
+		["bg+"] = "#0F2A0F", -- selected line — LED panel
+		["hl"] = "#77DD77", -- fuzzy matched chars in list
+		["hl+"] = "#77DD77", -- fuzzy matched chars in selected line
+		["pointer"] = "#77DD77", -- cursor pointer (▶)
+		["marker"] = "#77DD77", -- multi-select marker
+		["prompt"] = "#2E5C2E", -- ">" prompt prefix — readable-dim
+		["query"] = "#55BB55", -- typed query text
+		["info"] = "#2E5C2E", -- result count — readable-dim
+		["border"] = "#1A3018", -- borders (if used)
+		["separator"] = "#1A3018", -- preview separator
+		["scrollbar"] = "#2E5C2E", -- scrollbar track
+		["header"] = "#77DD77", -- cwd path text — bright
+		["gutter"] = "#060C06", -- left gutter — match bg, no bleed
 	},
 	fzf_opts = {
 		["--no-info"] = "",

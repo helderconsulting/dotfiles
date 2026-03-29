@@ -127,16 +127,10 @@ vim.fn.sign_define(
 	{ text = "", texthl = "DapBreakpointRejected", numhl = "DapBreakpointRejected" }
 )
 
-local colors = {
-	red = "#f7768e",
-	green = "#9ece6a",
-	orange = "#ff9e64",
-	grey = "#565f89",
-}
-vim.api.nvim_set_hl(0, "DapBreakpoint", { fg = colors.red })
-vim.api.nvim_set_hl(0, "DapStopped", { fg = colors.green, bold = true })
-vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = colors.orange })
-vim.api.nvim_set_hl(0, "DapStoppedLine", { fg = "#2e3c64" })
+vim.api.nvim_set_hl(0, "DapBreakpoint", { fg = "#77DD77" }) -- bright green — active breakpoint
+vim.api.nvim_set_hl(0, "DapStopped", { fg = "#F0F0FF", bold = true }) -- phosphor white — execution stopped, needs to stand out
+vim.api.nvim_set_hl(0, "DapBreakpointRejected", { fg = "#2E5C2E" }) -- readable-dim — rejected, de-emphasised
+vim.api.nvim_set_hl(0, "DapStoppedLine", { bg = "#0F2A0F" }) -- LED panel bg — current execution line
 
 local keymap = vim.keymap.set
 local opts = { noremap = true, silent = true }
