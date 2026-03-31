@@ -1,57 +1,138 @@
-"$schema" = 'https://starship.rs/config-schema.json'
+# ─── Format ───────────────────────────────────────────────────────────────────
 
 format = """
 $directory\
-[](fg:#769ff0 bg:#394260)\
 $git_branch\
+$git_state\
 $git_status\
-[](fg:#394260 bg:#212736)\
-$nodejs\
-$rust\
-$golang\
-$php\
-[](fg:#212736 bg:#1d2230)\
-$time\
-[ ](fg:#1d2230)\
-\n$character"""
+$fill\
+$cmd_duration\
+$jobs\
+$line_break\
+$character"""
+
+add_newline = true
+
+# ─── Fill ─────────────────────────────────────────────────────────────────────
+
+[fill]
+symbol = ' '
+
+# ─── Directory ────────────────────────────────────────────────────────────────
+# [[ mfd-mono ]] plain bold text, no background
+# [[ mfd-hud  ]] solid dark green LED panel: bright fg on #0F2A0F bg
 
 [directory]
-style = "fg:#e3e5e5 bg:#769ff0"
-format = "[ $path ]($style)"
-truncation_length = 3
-truncation_symbol = "…/"
+# [[ mfd-hud  ]] uncomment below and comment the two lines above
+style                   = 'bold fg:#77DD77 bg:#0F2A0F'
+format                  = '[ $path$read_only ]($style) '
+
+truncation_length         = 3
+truncate_to_repo          = true
+read_only                 = ' 󰌾'
+read_only_style         = 'fg:#2E5C2E bg:#0F2A0F' # [[ mfd-hud  ]]
+
+# ─── Git branch ───────────────────────────────────────────────────────────────
 
 [git_branch]
-symbol = ""
-style = "bg:#394260"
-format = '[[ $symbol $branch ](fg:#769ff0 bg:#394260)]($style)'
+# style                     = 'fg:#282830'         # [[ mfd-mono ]] dim
+style                   = 'fg:#55BB55'         # [[ mfd-hud  ]] fg — same level as directory text
+format                    = '[ $symbol$branch]($style) '
+symbol                    = ' '
+truncation_length         = 24
+truncation_symbol         = '…'
+
+# ─── Git status ───────────────────────────────────────────────────────────────
 
 [git_status]
-style = "bg:#394260"
-format = '[[($all_status$ahead_behind )](fg:#769ff0 bg:#394260)]($style)'
+# style                     = 'fg:#D0D0D8'         # [[ mfd-mono ]] fg
+style                   = 'fg:#55BB55'         # [[ mfd-hud  ]]
+format                    = '([$all_status$ahead_behind]($style) )'
+conflicted                = '!'
+ahead                     = '⇡${count}'
+behind                    = '⇣${count}'
+diverged                  = '⇕'
+untracked                 = '?'
+stashed                   = '$'
+modified                  = '~'
+staged                    = '+'
+renamed                   = '»'
+deleted                   = '✘'
+
+# ─── Git state (rebase, merge, etc.) ─────────────────────────────────────────
+
+[git_state]
+style                   = 'bold fg:#77DD77'    # [[ mfd-hud  ]]
+format                    = '\([$state( $progress_current/$progress_total)]($style)\) '
+
+# ─── Command duration ─────────────────────────────────────────────────────────
+
+[cmd_duration]
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]] readable-dim
+min_time                  = 2_000
+format                    = '[$duration]($style) '
+show_milliseconds         = false
+
+# ─── Jobs ─────────────────────────────────────────────────────────────────────
+
+[jobs]
+style                   = 'fg:#55BB55'         # [[ mfd-hud  ]]
+format                    = '[$symbol$number]($style) '
+symbol                    = '⚙ '
+number_threshold          = 1
+
+# ─── Prompt character ─────────────────────────────────────────────────────────
+
+[character]
+# [[ mfd-hud  ]] uncomment below and comment the two lines above
+success_symbol          = '[❯](fg:#2E5C2E)'
+error_symbol            = '[❯](bold fg:#77DD77)'
+
+# ─── Language / runtime modules ───────────────────────────────────────────────
 
 [nodejs]
-symbol = ""
-style = "bg:#212736"
-format = '[[ $symbol ($version) ](fg:#769ff0 bg:#212736)]($style)'
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$version]($style) '
+symbol                    = ' '
+
+[python]
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$version(\($virtualenv\))]($style) '
+symbol                    = ' '
 
 [rust]
-symbol = ""
-style = "bg:#212736"
-format = '[[ $symbol ($version) ](fg:#769ff0 bg:#212736)]($style)'
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$version]($style) '
+symbol                    = ' '
 
 [golang]
-symbol = ""
-style = "bg:#212736"
-format = '[[ $symbol ($version) ](fg:#769ff0 bg:#212736)]($style)'
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$version]($style) '
+symbol                    = ' '
 
-[php]
-symbol = ""
-style = "bg:#212736"
-format = '[[ $symbol ($version) ](fg:#769ff0 bg:#212736)]($style)'
+[lua]
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$version]($style) '
+symbol                    = ' '
+
+[docker_context]
+style                   = 'fg:#2E5C2E'         # [[ mfd-hud  ]]
+format                    = '[$symbol$context]($style) '
+symbol                    = ' '
+
+# ─── Disabled modules ─────────────────────────────────────────────────────────
+
+[battery]
+disabled = true
 
 [time]
-disabled = false
-time_format = "%R" # Hour:Minute Format
-style = "bg:#1d2230"
-format = '[[  $time ](fg:#a0a9cb bg:#1d2230)]($style)'
+disabled = true
+
+[username]
+disabled = true
+
+[hostname]
+disabled = true
+
+[package]
+disabled = true

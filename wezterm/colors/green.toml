@@ -1,0 +1,62 @@
+[colors]
+foreground    = "#55BB55"
+background    = "#060C06"
+
+cursor_bg     = "#55BB55"
+cursor_fg     = "#060C06"
+cursor_border = "#55BB55"
+
+selection_bg  = "#0A1A0A"
+selection_fg  = "#55BB55"
+
+# ANSI 0-7 — monotone: everything maps to fg, black maps to bg
+ansi = [
+  "#060C06", # 0 black   → bg
+  "#55BB55", # 1 red     → fg
+  "#55BB55", # 2 green   → fg
+  "#55BB55", # 3 yellow  → fg
+  "#55BB55", # 4 blue    → fg
+  "#55BB55", # 5 magenta → fg
+  "#55BB55", # 6 cyan    → fg
+  "#55BB55", # 7 white   → fg
+]
+
+# Bright ANSI 8-15
+brights = [
+  "#2E5C2E", # 8  bright black  → readable-dim (lifted from #1A3018 for ghost text visibility)
+  "#77DD77", # 9  bright red    → bright
+  "#77DD77", # 10 bright green  → bright
+  "#55BB55", # 11 bright yellow → fg
+  "#55BB55", # 12 bright blue   → fg
+  "#55BB55", # 13 bright magenta → fg
+  "#55BB55", # 14 bright cyan   → fg
+  "#77DD77", # 15 bright white  → bright
+]
+
+[colors.tab_bar]
+background = "#081208"
+
+[colors.tab_bar.active_tab]
+bg_color  = "#060C06"
+fg_color  = "#55BB55"
+intensity = "Bold"
+italic    = false
+
+[colors.tab_bar.inactive_tab]
+bg_color  = "#081208"
+fg_color  = "#1A3018"
+
+[colors.tab_bar.inactive_tab_hover]
+bg_color  = "#0A1A0A"
+fg_color  = "#55BB55"
+
+[colors.tab_bar.new_tab]
+bg_color  = "#081208"
+fg_color  = "#1A3018"
+
+[colors.tab_bar.new_tab_hover]
+bg_color  = "#0A1A0A"
+fg_color  = "#55BB55"
+
+[metadata]
+name        = "green"

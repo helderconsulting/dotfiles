@@ -2,7 +2,7 @@ local wezterm = require("wezterm")
 local config = wezterm.config_builder()
 
 config.font = wezterm.font("JetBrains Mono")
-config.color_scheme = "Oxocarbon Dark"
+config.color_scheme = "green"
 config.enable_tab_bar = false
 config.window_decorations = "RESIZE"
 config.window_padding = {
@@ -11,6 +11,11 @@ config.window_padding = {
 	top = 0,
 	bottom = 0,
 }
+
+config.use_fancy_tab_bar = false
+config.tab_bar_at_bottom = false
+config.hide_tab_bar_if_only_one_tab = true
+config.tab_max_width = 32
 
 config.native_macos_fullscreen_mode = true
 
