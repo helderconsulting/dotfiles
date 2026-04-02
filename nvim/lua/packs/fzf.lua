@@ -80,11 +80,10 @@ fzf.setup({
 	},
 })
 fzf.register_ui_select({
-	-- Use fzf-lua UI for vim.ui.select (e.g., LSP code actions)
 	winopts = {
-		height = 0.30,
-		width = 0.60,
-		row = 0.40,
+		height = 0.40,
+		width = 1.00,
+		row = 1.00,
 		border = "none",
 		preview = { hidden = "hidden" },
 	},

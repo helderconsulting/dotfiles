@@ -1,6 +1,6 @@
 [colors]
 foreground    = "#55BB55"
-background    = "#060C06"
+background    = "#000000"
 
 cursor_bg     = "#55BB55"
 cursor_fg     = "#060C06"
@@ -11,7 +11,7 @@ selection_fg  = "#55BB55"
 
 # ANSI 0-7 — monotone: everything maps to fg, black maps to bg
 ansi = [
-  "#060C06", # 0 black   → bg
+  "#000000", # 0 black   → bg
   "#55BB55", # 1 red     → fg
   "#55BB55", # 2 green   → fg
   "#55BB55", # 3 yellow  → fg

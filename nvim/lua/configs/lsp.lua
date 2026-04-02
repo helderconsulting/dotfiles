@@ -10,21 +10,34 @@ vim.api.nvim_create_autocmd("LspAttach", {
 			end
 
 			if client:supports_method("textDocument/inlayHint") then
-				vim.lsp.inlay_hint.enable(true, { bufnr = args.buf })
+				vim.lsp.inlay_hint.enable(false, { bufnr = args.buf })
 			end
 
 			if vim.g.completion_mode == "native" and client:supports_method("textDocument/completion") then
 				vim.lsp.completion.enable(true, client.id, args.buf, { autotrigger = true })
 			end
 
+			if client:supports_method("textDocument/documentHighlight") then
+				vim.api.nvim_create_autocmd({ "CursorHold", "CursorHoldI" }, {
+					buffer = args.buf,
+					callback = vim.lsp.buf.document_highlight,
+				})
+				vim.api.nvim_create_autocmd("CursorMoved", {
+					buffer = args.buf,
+					callback = vim.lsp.buf.clear_references,
+				})
+			end
 			if client:supports_method("textDocument/documentColor") then
-				vim.lsp.document_color.enable(true, args.buf, {
+				vim.lsp.document_color.enable(true, {
+					bufnr = args.buf,
 					style = "background",
 				})
 			end
-			vim.keymap.set("n", "<leader>d", vim.lsp.buf.definition, { desc = "go to definition", buffer = args.buf })
+
+			vim.keymap.set("n", "<leader>d", vim.lsp.buf.definition, { desc = "go to definition", buf = args.buf })
 			vim.keymap.set("n", "<leader>i", vim.lsp.buf.implementation, { desc = "go to implementation", buffer = args.buf })
-			vim.keymap.set("n", "<leader>r", vim.lsp.buf.references, { desc = "go to references", buffer = args.buf })
+			vim.keymap.set("n", "<leader>r", vim.lsp.buf.references, { desc = "go to references", buf = args.buf })
+			vim.keymap.set("n", "<leader>l", vim.lsp.codelens.run, { desc = "run codelens", buf = args.buf })
 			vim.keymap.set(
 				"n",
 				"<leader>T",
@@ -41,18 +54,10 @@ vim.api.nvim_create_autocmd("LspProgress", {
 	end,
 })
 
-local capabilities = vim.lsp.protocol.make_client_capabilities()
-local ok_blink, blink = pcall(require, "blink.cmp")
-if ok_blink then
-	capabilities = blink.get_lsp_capabilities(capabilities)
-end
-
 vim.lsp.enable({
 	"c_ls",
 	"lua_ls",
-	"rust_ls",
 	"typescript_ls",
 	"eslint_ls",
 	"yaml_ls",
-}, { capabilities = capabilities })
-
+})
