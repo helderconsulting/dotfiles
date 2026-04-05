@@ -88,20 +88,3 @@ vim.g.loaded_python3_provider = 0
 vim.g.loaded_ruby_provider = 0
 vim.g.loaded_perl_provider = 0
 vim.g.loaded_node_provider = 0
-
-require("vim._core.ui2").enable({
-	enable = true,
-	msg = {
-		targets = "msg",
-		msg = {
-			height = 0.5,
-			timeout = 4000,
-		},
-		dialog = {
-			height = 0.5,
-		},
-		pager = {
-			height = 0.5,
-		},
-	},
-})
