@@ -3,6 +3,9 @@ vim.pack.add({
 })
 
 require("which-key").setup({
+	icons = {
+		mappings = false,
+	},
 	opts = {
 		triggers = {
 			{ "<leader>", mode = { "n", "v", "d" } },
