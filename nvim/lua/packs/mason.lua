@@ -16,6 +16,7 @@ require("mason").setup({
 		"lua-language-server",
 		"yaml-language-server",
 		"ember-language-server",
+		"svelte-language-server",
 		"rust_analyzer",
 		"js-debug-adapter",
 		"eslint_d",
@@ -24,6 +25,6 @@ require("mason").setup({
 		"stylua",
 	},
 })
-vim.keymap.set("n", "<leader>l", function()
+vim.keymap.set("n", "<leader>L", function()
 	require("mason.ui").open()
 end, { desc = "Open language tools" })

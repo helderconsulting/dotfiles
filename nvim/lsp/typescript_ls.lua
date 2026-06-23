@@ -13,6 +13,15 @@ return {
 					enableServerSideFuzzyMatch = true,
 				},
 			},
+			tsserver = {
+				globalPlugins = {
+					{
+						name = "typescript-svelte-plugin",
+						location = vim.fn.stdpath("data") .. "/mason/packages/svelte-language-server/libexec/lib/node_modules/typescript-svelte-plugin",
+						enableForWorkspaceTypeScriptVersions = true,
+					},
+				},
+			},
 		},
 		typescript = {
 			updateImportsOnFileMove = { enabled = "always" },

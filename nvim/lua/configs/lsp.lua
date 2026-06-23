@@ -60,4 +60,5 @@ vim.lsp.enable({
 	"typescript_ls",
 	"eslint_ls",
 	"yaml_ls",
+	"svelte_ls",
 })

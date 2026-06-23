@@ -77,6 +77,7 @@ end
 
 vim.filetype.add({
 	extension = {
+		svelte = "svelte",
 		hbs = "handlebars",
 		handlebars = "handlebars",
 		mustache = "handlebars",

@@ -6,6 +6,7 @@ require("conform").setup({
 		lua = { "stylua" },
 		javascript = { "prettier", stop_after_first = true },
 		typescript = { "prettier", stop_after_first = true },
+		svelte = { "prettier", stop_after_first = true },
 		json = { "prettier", stop_after_first = true },
 		yaml = { "prettier", stop_after_first = true },
 		handlebars = { "djlint" },

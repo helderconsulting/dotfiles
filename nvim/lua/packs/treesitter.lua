@@ -21,6 +21,9 @@ local ts = require("nvim-treesitter")
 -- https://github.com/nvim-treesitter/nvim-treesitter/blob/main/SUPPORTED_LANGUAGES.md
 ts.install({
 	"c",
+	"css",
+	"html",
+	"svelte",
 	"lua",
 	"luadoc",
 	"glimmer",
