@@ -61,4 +61,5 @@ vim.lsp.enable({
 	"eslint_ls",
 	"yaml_ls",
 	"svelte_ls",
+	"markdown_ls",
 })

@@ -26,7 +26,6 @@ ts.install({
 	"svelte",
 	"lua",
 	"luadoc",
-	"glimmer",
 	"javascript",
 	"comment",
 	"query",
@@ -43,8 +42,9 @@ ts.install({
 	"git_config",
 	"git_rebase",
 	"http",
+	"go",
+	"markdown",
 })
-vim.treesitter.language.register("glimmer", "handlebars")
 
 require("nvim-treesitter-textobjects").setup({
 	select = {
