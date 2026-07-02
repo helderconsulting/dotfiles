@@ -1,6 +1,7 @@
 vim.pack.add({
 	"https://github.com/mfussenegger/nvim-dap",
 	"https://github.com/igorlfs/nvim-dap-view",
+	"https://github.com/leoluz/nvim-dap-go",
 })
 
 local dap_ok, dap = pcall(require, "dap")
@@ -21,6 +22,32 @@ if dap_ok and dapui_ok then
 	dap.listeners.before.event_exited.dapui_config = function()
 		dapui.close()
 	end
+end
+
+local dap_go_ok, dap_go = pcall(require, "dap-go")
+if dap_go_ok then
+	dap_go.setup({
+		dap_configurations = {
+			{
+				type = "go",
+				name = "Attach remote",
+				mode = "remote",
+				request = "attach",
+			},
+		},
+		delve = {
+			path = "dlv",
+			initialize_timeout_sec = 20,
+			port = "${port}",
+			args = {},
+			build_flags = {},
+			detached = vim.fn.has("win32") == 0,
+			cwd = nil,
+		},
+		tests = {
+			verbose = false,
+		},
+	})
 end
 for _, language in ipairs({ "typescript", "javascript" }) do
 	dap.configurations[language] = {

@@ -1,12 +1,18 @@
 vim.pack.add({
 	"https://github.com/nvim-neotest/neotest.git",
 	"https://github.com/nvim-neotest/neotest-jest.git",
+	"https://github.com/fredrikaverpil/neotest-golang",
 	"https://github.com/nvim-neotest/nvim-nio",
 })
 local neotest = require("neotest")
 neotest.setup({
 	adapters = {
 		require("rustaceanvim.neotest"),
+		require("neotest-golang")({
+			go_test_args = { "-v", "-race", "-count=1", "-timeout=60s" },
+			dap_go_enabled = true,
+			runner = "gotestsum",
+		}),
 		require("neotest-jest")({
 			isTestFile = function(path)
 				return path:match("%.e2e.ts$") or path:match("%.spec.ts$")

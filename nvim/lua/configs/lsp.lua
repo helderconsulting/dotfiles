@@ -62,4 +62,5 @@ vim.lsp.enable({
 	"yaml_ls",
 	"svelte_ls",
 	"markdown_ls",
+	"go_ls",
 })
