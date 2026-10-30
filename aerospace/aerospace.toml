@@ -111,6 +111,14 @@ on-mode-changed = []
     alt-comma = 'layout accordion horizontal vertical'
 
     # See: https://nikitabobko.github.io/AeroSpace/commands#focus
+    # ALT arrows: one grid across Neovim windows, WezTerm panes and windows here (next monitor,
+    # then next workspace). Takes word-jumping with ALT arrows away from every app.
+    # See wezterm/bin/nav.
+    alt-left = 'exec-and-forget ~/.config/wezterm/bin/nav left'
+    alt-right = 'exec-and-forget ~/.config/wezterm/bin/nav right'
+    alt-up = 'exec-and-forget ~/.config/wezterm/bin/nav up'
+    alt-down = 'exec-and-forget ~/.config/wezterm/bin/nav down'
+
     alt-n = 'focus left'
     alt-o = 'focus down'
     alt-e = 'focus up'
@@ -135,6 +143,18 @@ on-mode-changed = []
     alt-6 = 'workspace 6'
     alt-7 = 'workspace 7'
     alt-8 = 'workspace 8'
+
+    # Numbered entries of the WezTerm agent bar (agents and Neovim), from anywhere: alt-N picks a
+    # workspace, ctrl-alt-N an agent. See wezterm/bin/agent-jump.
+    ctrl-alt-1 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 1'
+    ctrl-alt-2 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 2'
+    ctrl-alt-3 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 3'
+    ctrl-alt-4 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 4'
+    ctrl-alt-5 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 5'
+    ctrl-alt-6 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 6'
+    ctrl-alt-7 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 7'
+    ctrl-alt-8 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 8'
+    ctrl-alt-9 = 'exec-and-forget ~/.config/wezterm/bin/agent-jump 9'
 
     # See: https://nikitabobko.github.io/AeroSpace/commands#move-node-to-workspace
     alt-shift-1 = 'move-node-to-workspace 1'

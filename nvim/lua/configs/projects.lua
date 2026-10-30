@@ -83,7 +83,18 @@ vim.api.nvim_create_autocmd("VimEnter", {
 		-- packs.git is normally loaded on a later VimEnter handler; load it here first.
 		if vim.fs.root(0, ".git") then
 			require("packs.git")
-			vim.cmd("CodeDiff")
+			-- CodeDiff opens its own tab; drop the empty startup tab it leaves behind.
+			local start_tab = vim.api.nvim_get_current_tabpage()
+			vim.api.nvim_create_autocmd("User", {
+				pattern = "CodeDiffOpen",
+				once = true,
+				callback = function()
+					if vim.api.nvim_tabpage_is_valid(start_tab) and start_tab ~= vim.api.nvim_get_current_tabpage() then
+						vim.cmd(vim.api.nvim_tabpage_get_number(start_tab) .. "tabclose")
+					end
+				end,
+			})
+			vim.cmd("CodeDiffLive")
 		else
 			vim.cmd("Projects")
 		end

@@ -1,1 +1,5 @@
-std = "vim"
+std = "lua51+vim"
+
+[lints]
+# Tables like { "<leader>x", mode = { "n" } } are idiomatic in Neovim configs.
+mixed_table = "allow"

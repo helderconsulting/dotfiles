@@ -40,6 +40,9 @@ local highlights = {
 	ReviewNoteLine = { bg = "#120F18" },
 	ReviewNoteTitle = { fg = palette.purple, bg = "#120F18", bold = true },
 	ReviewNoteHint = { fg = "#505050", bg = "#120F18" },
+	InfoFloat = { bg = "#0C140C" },
+	-- Window separators match WezTerm's split lines and agent bar edges.
+	WinSeparator = { fg = "#223022" },
 }
 for group, spec in pairs(highlights) do
 	vim.api.nvim_set_hl(0, group, spec)

@@ -1,0 +1,20 @@
+#!/bin/sh
+# ALT arrows everywhere, bound in AeroSpace: one grid across Neovim windows, WezTerm panes and
+# AeroSpace windows. When WezTerm is focused it makes the move itself (wezterm/navigate.lua), which
+# is far quicker than asking it about panes from here; otherwise aerospace-edge moves to the next
+# window, monitor or workspace. Full paths: AeroSpace runs this without the shell's PATH.
+#
+#   nav <left|right|up|down>
+
+aerospace=/opt/homebrew/bin/aerospace
+wezterm=/opt/homebrew/bin/wezterm
+direction=$1
+edge="$(dirname "$0")/aerospace-edge"
+
+if [ "$("$aerospace" list-windows --focused --format '%{app-bundle-id}')" != com.github.wez.wezterm ]; then
+	exec "$edge" "$direction"
+fi
+
+# WezTerm moves itself (navigate.lua): the window title carries the request, a unique token makes
+# a repeated direction a new title.
+exec "$wezterm" cli set-window-title "nav $direction $$"

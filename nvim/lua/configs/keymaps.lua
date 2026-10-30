@@ -26,7 +26,22 @@ end, { desc = "show code actions" })
 vim.keymap.set("n", "<leader>-", ":bd<cr>", { desc = "close buffer" })
 vim.keymap.set("n", "<leader>W", ":wa<cr>", { desc = "save all" })
 vim.keymap.set("n", "<leader>w", ":w<cr>", { desc = "save file" })
-vim.keymap.set("n", "<M-Left>", "<C-w>h", { desc = "move to left window" })
-vim.keymap.set("n", "<M-Right>", "<C-w>l", { desc = "move to right window" })
-vim.keymap.set("n", "<M-Up>", "<C-w>k", { desc = "move to window above" })
-vim.keymap.set("n", "<M-Down>", "<C-w>j", { desc = "move to window below" })
+-- Move between windows; at the edge of Neovim hand the move to WezTerm, which continues into the
+-- next pane or AeroSpace window (see wezterm/navigate.lua). The counter makes a repeated direction
+-- still a change for WezTerm's user-var-changed event.
+local nav_count = 0
+local function move(wincmd, direction)
+	return function()
+		local win = vim.api.nvim_get_current_win()
+		vim.cmd.wincmd(wincmd)
+		if vim.api.nvim_get_current_win() == win and vim.env.WEZTERM_PANE then
+			nav_count = nav_count + 1
+			local value = vim.base64.encode(direction .. ":" .. nav_count)
+			vim.api.nvim_ui_send(("\27]1337;SetUserVar=nav=%s\7"):format(value))
+		end
+	end
+end
+vim.keymap.set("n", "<M-Left>", move("h", "Left"), { desc = "move to left window" })
+vim.keymap.set("n", "<M-Right>", move("l", "Right"), { desc = "move to right window" })
+vim.keymap.set("n", "<M-Up>", move("k", "Up"), { desc = "move to window above" })
+vim.keymap.set("n", "<M-Down>", move("j", "Down"), { desc = "move to window below" })

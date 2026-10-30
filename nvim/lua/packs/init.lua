@@ -29,7 +29,6 @@ vim.api.nvim_create_autocmd("VimEnter", {
 	callback = function()
 		require("packs.fzf")
 		require("packs.oil")
-		require("packs.lualine")
 		require("packs.mason")
 		require("packs.whichkey")
 		require("packs.dap")

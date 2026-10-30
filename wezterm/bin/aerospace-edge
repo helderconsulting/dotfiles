@@ -1,0 +1,62 @@
+#!/bin/sh
+# Move an ALT arrow step between AeroSpace windows (see bin/nav), in this order: the next window on
+# this workspace, then (left and right) the previous or next workspace of this monitor that has
+# windows, then the next monitor. Workspaces come before monitors so an empty workspace on another
+# screen does not swallow the move. Landing in WezTerm focuses its pane on the side the move came
+# from. Full paths: this
+# runs from AeroSpace and WezTerm's GUI, neither has the shell's PATH.
+#
+#   aerospace-edge <left|right|up|down>
+
+aerospace=/opt/homebrew/bin/aerospace
+wezterm=/opt/homebrew/bin/wezterm
+jq=/usr/bin/jq
+direction=$1
+
+# Moving left into WezTerm lands on its rightmost pane, and so on.
+enter_wezterm() {
+	[ "$("$aerospace" list-windows --focused --format '%{app-bundle-id}')" = com.github.wez.wezterm ] || return 0
+	case $direction in
+	left) select='max_by(.left_col + .size.cols)' ;;
+	right) select='min_by(.left_col)' ;;
+	up) select='max_by(.top_row + .size.rows)' ;;
+	down) select='min_by(.top_row)' ;;
+	esac
+	focused=$("$wezterm" cli list-clients --format json | "$jq" -r '.[0].focused_pane_id')
+	pane=$("$wezterm" cli list --format json | "$jq" -r --argjson p "$focused" \
+		"(.[] | select(.pane_id == \$p) | .tab_id) as \$t | [.[] | select(.tab_id == \$t)] | $select | .pane_id")
+	[ -n "$pane" ] && "$wezterm" cli activate-pane --pane-id "$pane"
+}
+
+focus() {
+	"$aerospace" focus --boundaries "$1" --boundaries-action fail "$direction" 2>/dev/null
+}
+
+# 1. The next window on this workspace.
+if focus workspace; then
+	enter_wezterm
+	exit 0
+fi
+
+# 2. Left and right: the previous or next workspace of this monitor that has windows, landing on its
+#    window nearest the side the move came from.
+case $direction in
+right) pick='found { print; exit } $0 == current { found = 1 }' back=left ;;
+left) pick='$0 == current { print previous; exit } { previous = $0 }' back=right ;;
+esac
+if [ -n "$pick" ]; then
+	current=$("$aerospace" list-workspaces --focused)
+	target=$("$aerospace" list-workspaces --monitor focused --empty no | awk -v current="$current" "$pick")
+	if [ -n "$target" ]; then
+		"$aerospace" workspace "$target"
+		i=0
+		while [ $i -lt 10 ] && "$aerospace" focus --boundaries workspace --boundaries-action fail "$back" 2>/dev/null; do
+			i=$((i + 1))
+		done
+		enter_wezterm
+		exit 0
+	fi
+fi
+
+# 3. The next monitor.
+focus all-monitors-outer-frame && enter_wezterm

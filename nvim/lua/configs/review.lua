@@ -279,37 +279,55 @@ local function prompt(list)
 	return table.concat(parts, "\n\n")
 end
 
+local claude_spinner = { ["◐"] = true, ["◓"] = true, ["◑"] = true, ["◒"] = true }
+
+local function same_path(a, b)
+	return a and b and (vim.uv.fs_realpath(a) or a) == (vim.uv.fs_realpath(b) or b)
+end
+
 -- Agent panes from the state files, joined with `wezterm cli list` to drop closed panes.
-local function agent_panes()
+-- Panes in the worktree `root` come first, then idle before busy.
+local function agent_panes(root)
 	local out = vim.system({ "wezterm", "cli", "list", "--format", "json" }, { text = true }):wait()
 	if out.code ~= 0 then
 		return {}
 	end
 	local panes = {}
 	for _, p in ipairs(vim.json.decode(out.stdout)) do
+		local agent, state, agent_root, branch
 		local f = io.open(state_dir .. "/" .. p.pane_id)
 		if f then
-			local agent, state, cwd = f:read("*l"):match("^(.-)\t(.-)\t(.*)$")
+			-- agent, state, root, branch, worktree, title (see wezterm/bin/agent-status)
+			local fields = vim.split(f:read("*l") or "", "\t")
+			agent, state, agent_root, branch = fields[1], fields[2], fields[3], fields[4]
 			f:close()
-			-- No hook fires when a turn is cancelled; Claude Code's ✳ title prefix means idle.
-			if state == "working" and p.title:find("^✳") then
-				state = "idle"
-			end
+		end
+		-- Claude Code prefixes its title with ✳ when idle and a spinner while busy. That also covers
+		-- sessions whose hooks haven't written a state file yet, and turns cancelled without a hook.
+		local glyph = p.title:match("^(%S+) ")
+		if glyph == "✳" then
+			agent, state = agent or "claude", "idle"
+		elseif not agent and claude_spinner[glyph] then
+			agent, state = "claude", "working"
+		end
+		if agent then
+			local cwd = vim.fs.normalize(vim.uri_to_fname(p.cwd))
+			agent_root = agent_root ~= "" and agent_root or vim.fs.root(cwd, ".git") or cwd
 			table.insert(panes, {
 				id = p.pane_id,
 				agent = agent,
 				state = state,
-				cwd = cwd,
+				root = agent_root,
+				branch = branch or "",
+				here = same_path(agent_root, root),
 				title = p.title:gsub("^[^%w]+", ""),
 			})
 		end
 	end
 	local rank = { idle = 1, done = 1, waiting = 2, working = 3 }
-	local here = vim.fs.root(0, ".git") or vim.fn.getcwd()
 	table.sort(panes, function(a, b)
-		local ah, bh = vim.startswith(a.cwd, here), vim.startswith(b.cwd, here)
-		if ah ~= bh then
-			return ah
+		if a.here ~= b.here then
+			return a.here
 		end
 		if rank[a.state] ~= rank[b.state] then
 			return (rank[a.state] or 9) < (rank[b.state] or 9)
@@ -335,11 +353,37 @@ local function send_to(pane_id, text)
 	end)
 end
 
--- Pick an agent pane with fzf-lua and send list to it as one prompt.
+-- Send list as one prompt to the agent working in the comments' worktree. With exactly one agent
+-- there it goes straight to it; otherwise pick with fzf-lua, agents in that worktree first. Never to
+-- an agent waiting on a permission prompt.
 function M.send_comments(list, on_sent)
-	local panes = agent_panes()
+	local root = list[1].root
+	for _, c in ipairs(list) do
+		if not same_path(c.root, root) then
+			root = nil
+		end
+	end
+	local panes = agent_panes(root)
 	if #panes == 0 then
 		vim.notify("review: no agent panes found", vim.log.levels.WARN)
+		return
+	end
+	local text = prompt(list)
+	local function deliver(p)
+		-- A waiting agent shows a permission prompt; the pasted text and Enter would answer it.
+		if p.state == "waiting" then
+			vim.notify(("review: %s is waiting on a prompt, answer it first"):format(p.title), vim.log.levels.WARN)
+			return
+		end
+		send_to(p.id, text)
+		vim.notify(("review: sent %d comment(s) to %s (%s)"):format(#list, p.title, p.branch))
+		on_sent()
+	end
+	local here = vim.tbl_filter(function(p)
+		return p.here
+	end, panes)
+	if #here == 1 and here[1].state ~= "waiting" then
+		deliver(here[1])
 		return
 	end
 	require("packs.fzf")
@@ -348,27 +392,24 @@ function M.send_comments(list, on_sent)
 	local colors = { idle = "#3F6F3F", done = "#77DD77", working = "#A58BD3", waiting = "#E0955A" }
 	local entries, by_entry = {}, {}
 	for _, p in ipairs(panes) do
-		local entry = ("%s  %s  %s"):format(
+		local entry = ("%s  %s  %s  %s"):format(
 			utils.ansi_from_rgb(colors[p.state] or colors.idle, ("%-8s"):format(p.state)),
 			p.title,
-			utils.ansi_from_rgb("#3F6F3F", vim.fn.fnamemodify(p.cwd, ":~"))
+			utils.ansi_from_rgb(p.here and "#55BB55" or "#3F6F3F", p.branch),
+			utils.ansi_from_rgb("#3F6F3F", vim.fn.fnamemodify(p.root, ":~"))
 		)
 		table.insert(entries, entry)
 		by_entry[utils.strip_ansi_coloring(entry)] = p
 	end
-	local text = prompt(list)
 	fzf.fzf_exec(entries, {
 		prompt = ("Send %d comment%s> "):format(#list, #list == 1 and "" or "s"),
 		fzf_opts = { ["--ansi"] = true },
 		actions = {
 			["enter"] = function(selected)
 				local p = selected and by_entry[utils.strip_ansi_coloring(selected[1])]
-				if not p then
-					return
+				if p then
+					deliver(p)
 				end
-				send_to(p.id, text)
-				vim.notify(("review: sent %d comment(s) to %s"):format(#list, p.title))
-				on_sent()
 			end,
 		},
 	})

@@ -87,6 +87,8 @@ number_threshold          = 1
 # [[ mfd-hud  ]] uncomment below and comment the two lines above
 success_symbol          = '[❯](fg:#2E5C2E)'
 error_symbol            = '[❯](bold fg:#77DD77)'
+# Same as insert mode: the cursor shape and the WezTerm bar show the vi mode.
+vimcmd_symbol           = '[❯](fg:#2E5C2E)'
 
 # ─── Language / runtime modules ───────────────────────────────────────────────
 

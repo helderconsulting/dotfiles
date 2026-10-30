@@ -13,7 +13,8 @@ vim.api.nvim_create_autocmd({ "BufEnter", "BufWritePost", "InsertLeave" }, {
 	group = lint_augroup,
 	callback = function()
 		if vim.bo.modifiable then
-			lint.try_lint()
+			-- selene only reads selene.toml from its working directory, so run it from the nearest one.
+			lint.try_lint(nil, { cwd = vim.fs.root(0, "selene.toml") })
 		end
 	end,
 })

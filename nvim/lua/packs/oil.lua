@@ -1,5 +1,6 @@
 vim.pack.add({
 	"https://github.com/stevearc/oil.nvim",
+	"https://github.com/nvim-tree/nvim-web-devicons",
 })
 vim.api.nvim_create_autocmd("FileType", {
 	pattern = "oil",

@@ -84,3 +84,15 @@ vim.lsp.enable({
 	"emmet_ls",
 	"postgres_ls",
 })
+
+-- LSP info popups (hover, signature help, diagnostic details) styled like the review comment
+-- popup: a blank border in the popup's own color for padding, tinted green instead of purple.
+local open_floating_preview = vim.lsp.util.open_floating_preview
+---@diagnostic disable-next-line: duplicate-set-field
+vim.lsp.util.open_floating_preview = function(contents, syntax, opts)
+	opts = opts or {}
+	opts.border = opts.border or "solid"
+	local buf, win = open_floating_preview(contents, syntax, opts)
+	vim.wo[win].winhighlight = "Normal:InfoFloat,NormalFloat:InfoFloat,FloatBorder:InfoFloat,EndOfBuffer:InfoFloat"
+	return buf, win
+end
