@@ -362,22 +362,33 @@ local function record_order(order)
 end
 
 -- Record the worktree of the last focused agent; Neovim watches this file to point its diff view
--- at that worktree. Focusing a non-agent pane (Neovim itself) keeps the previous agent.
+-- at that worktree. Focusing a non-agent pane (Neovim itself) keeps the previous agent. An agent
+-- only counts once it has stayed focused for a moment: coming back from AeroSpace first focuses the
+-- pane last used in WezTerm and then the one on the side you came from, and passing through an
+-- agent pane must not move Neovim to its project.
+local pending_focus
 local function record_focus(agents)
+	local focus
 	for _, a in ipairs(agents) do
 		if a.focused and a.root and a.root ~= "" then
-			local focus = a.root .. "\t" .. a.pane:pane_id() .. "\t" .. a.branch
-			if focus ~= last_focus then
-				local f = io.open(state_dir .. "/focus", "w")
-				if f then
-					f:write(focus, "\n")
-					f:close()
-					last_focus = focus
-				end
-			end
-			return
+			focus = a.root .. "\t" .. a.pane:pane_id() .. "\t" .. a.branch
 		end
 	end
+	pending_focus = focus
+	if not focus or focus == last_focus then
+		return
+	end
+	wezterm.time.call_after(0.3, function()
+		if pending_focus ~= focus or focus == last_focus then
+			return
+		end
+		local f = io.open(state_dir .. "/focus", "w")
+		if f then
+			f:write(focus, "\n")
+			f:close()
+			last_focus = focus
+		end
+	end)
 end
 
 local function refresh(window)
@@ -401,13 +412,15 @@ function M.apply(config)
 	-- CTRL|ALT 1-9 jump to the numbered bar entries from anywhere; they are AeroSpace bindings
 	-- running bin/agent-jump, so they also bring WezTerm forward.
 	config.keys = config.keys or {}
-	-- CTRL|ALT Enter splits right like CTRL|ALT h and starts an agent there. It runs inside the
-	-- pane's shell, so the pane survives the agent exiting.
+	-- CTRL|ALT Enter splits right like CTRL|ALT h and starts an agent there, then a shell so the pane
+	-- survives the agent exiting. Started as the shell's command rather than typed in, since zsh
+	-- prompts start in vi normal mode.
+	local shell = os.getenv("SHELL") or "zsh"
 	table.insert(config.keys, {
 		mods = "CTRL|ALT",
 		key = "Enter",
 		action = wezterm.action_callback(function(_, pane)
-			pane:split({ direction = "Right" }):send_text("claude\r")
+			pane:split({ direction = "Right", args = { shell, "-ic", "claude; exec " .. shell } })
 		end),
 	})
 

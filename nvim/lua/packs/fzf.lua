@@ -90,7 +90,20 @@ fzf.register_ui_select({
 })
 vim.keymap.set("n", "<leader>f", fzf.files, { desc = "search across all files" })
 vim.keymap.set("n", "<leader>F", fzf.grep_cword, { desc = "search word across all files" })
-vim.keymap.set("n", "<leader>B", fzf.buffers, { desc = "search in buffers" })
+vim.keymap.set("n", "<leader>B", function()
+	-- From the diff view or Neogit, open the picked buffer in an editing tab (packs/git.lua) so the
+	-- view keeps its layout.
+	fzf.buffers({
+		actions = {
+			["enter"] = function(selected, opts)
+				if vim.t.git_view then
+					require("packs.git").editor_tab()
+				end
+				require("fzf-lua.actions").buf_edit(selected, opts)
+			end,
+		},
+	})
+end, { desc = "search in buffers" })
 vim.keymap.set("n", "<leader>c", function()
 	fzf.files({ cwd = "~/.config/nvim/" })
 end, { desc = "search vim configurations" })

@@ -1,3 +1,7 @@
+-- Returns helpers for leaving git views (the diff view, Neogit) for normal editing; used by the
+-- buffer picker and close keys.
+local M = {}
+
 vim.pack.add({
 	"https://github.com/NeogitOrg/neogit",
 	"https://github.com/esmuellert/codediff.nvim",
@@ -23,6 +27,13 @@ if ok_codediff then
 			char_insert = "#1F5A26",
 			char_delete = "#5C3418",
 		},
+		-- Hunks run on into the next file and stop at the ends, so ALT up / down can step through all
+		-- changes and leave Neovim past the first or last one (configs/keymaps.lua).
+		diff = {
+			cycle_hunks_across_files = true,
+			cycle_next_hunk = false,
+			cycle_next_file = false,
+		},
 		explorer = {
 			position = "right",
 			view_mode = "tree",
@@ -45,6 +56,10 @@ if ok_codediff then
 		vim.bo[buf].bufhidden = "wipe"
 		vim.api.nvim_buf_set_extmark(buf, welcome_ns, 0, 0, {})
 		vim.bo[buf].modifiable = false
+		-- codediff's own q isn't set on this page; close the view like everywhere else in it.
+		vim.keymap.set("n", "q", function()
+			require("codediff.ui.lifecycle").close(vim.api.nvim_get_current_tabpage())
+		end, { buffer = buf, desc = "close diff view" })
 		return buf
 	end
 
@@ -215,9 +230,132 @@ end
 
 local function read_focus()
 	local f = io.open(state_dir .. "/focus")
+	if not f then
+		return nil
+	end
+	local root = (f:read("*l") or ""):match("^([^\t]+)")
+	f:close()
+	return root
+end
+
+-- Which Neovims follow. Each one belongs to the project it was opened in (by git common dir, so a
+-- repo's worktrees are one project) and registers it in nvim-<pane>. An agent attaches to the
+-- Neovims of its own project; an agent in a project without one moves only the Neovim used last
+-- (the editor file, written on focus), which with a single Neovim is always that one.
+local self_pane = vim.env.WEZTERM_PANE
+local self_file = self_pane and (state_dir .. "/nvim-" .. self_pane)
+local common_dirs = {}
+
+local function common_dir(path)
+	if common_dirs[path] == nil then
+		local out = vim.system({ "git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir" }, { text = true })
+			:wait()
+		common_dirs[path] = out.code == 0 and vim.trim(out.stdout) or false
+	end
+	return common_dirs[path] or nil
+end
+
+local function read_line(path)
+	local f = io.open(path)
+	if not f then
+		return nil
+	end
+	local line = f:read("*l")
+	f:close()
+	return line
+end
+
+local function write_line(path, line)
+	local f = io.open(path, "w")
 	if f then
-		target = (f:read("*l") or ""):match("^([^\t]+)")
+		f:write(line, "\n")
 		f:close()
+	end
+end
+
+-- Make this Neovim belong to the project at path (on start, and when a project is opened).
+function M.set_home(path)
+	if self_file then
+		write_line(self_file, (common_dir(path) or "") .. "\t" .. vim.fn.getpid())
+	end
+end
+
+local function follows(root)
+	if not self_pane then
+		return true
+	end
+	local project = common_dir(root)
+	local claimed, mine = false, false
+	for name, kind in vim.fs.dir(state_dir) do
+		local pane = kind == "file" and name:match("^nvim%-(%d+)$")
+		if pane then
+			local home, pid = (read_line(state_dir .. "/" .. name) or ""):match("^(.*)\t(%d+)$")
+			-- A Neovim that crashed left its file behind; its process is gone.
+			if home ~= "" and home == project and vim.uv.kill(tonumber(pid), 0) == 0 then
+				claimed = true
+				mine = mine or pane == self_pane
+			end
+		end
+	end
+	if claimed then
+		return mine
+	end
+	local last = read_line(state_dir .. "/editor")
+	return not last or last == self_pane
+end
+
+-- This file loads during startup (VimEnter), so register right away; a new Neovim is also the one
+-- in use. The project is where Neovim was opened: $PWD from the shell that started it, which :cd
+-- and :restart leave alone (its cwd and the pane's directory may already follow an agent).
+local function mark_used()
+	if self_pane then
+		write_line(state_dir .. "/editor", self_pane)
+	end
+end
+M.set_home(vim.env.PWD or vim.fn.getcwd())
+mark_used()
+vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = mark_used })
+vim.api.nvim_create_autocmd("VimLeavePre", {
+	group = group,
+	callback = function()
+		if self_file then
+			os.remove(self_file)
+		end
+	end,
+})
+
+-- Editing windows of the current tab that show a file of the project left behind (or the empty
+-- placeholder of an earlier switch) switch to the new project's files, most recently used first, or
+-- an empty placeholder. Other files stay; the old buffers stay loaded for switching back.
+local function swap_editor_windows(old_root)
+	if vim.t.git_view then
+		return
+	end
+	local files = {}
+	for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+		if info.name ~= "" and vim.bo[info.bufnr].buftype == "" and vim.fs.relpath(target, info.name) then
+			table.insert(files, info)
+		end
+	end
+	table.sort(files, function(a, b)
+		return a.lastused > b.lastused
+	end)
+	local next_file = 1
+	for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+		local shown = vim.api.nvim_win_get_buf(win)
+		local name = vim.api.nvim_buf_get_name(shown)
+		local left_behind = name ~= "" and vim.fs.relpath(old_root, name) and not vim.fs.relpath(target, name)
+		if left_behind or vim.b[shown].project_placeholder then
+			local buf = files[next_file] and files[next_file].bufnr
+			next_file = next_file + 1
+			if not buf then
+				-- Marked so the next switch replaces it like a file of the project left behind.
+				buf = vim.api.nvim_create_buf(false, true)
+				vim.bo[buf].bufhidden = "wipe"
+				vim.b[buf].project_placeholder = true
+			end
+			vim.api.nvim_win_set_buf(win, buf)
+		end
 	end
 end
 
@@ -231,10 +369,16 @@ watcher:start(state_dir, {}, function(_, filename)
 			100,
 			0,
 			vim.schedule_wrap(function()
-				read_focus()
+				local root = read_focus()
+				if not root or vim.fn.isdirectory(root) == 0 or not follows(root) then
+					return
+				end
+				target = root
 				-- Neovim's cwd moves too, so pickers, grep and new files work in that project.
-				if target and vim.fn.isdirectory(target) == 1 and not same_path(vim.fn.getcwd(), target) then
+				local old = vim.fn.getcwd()
+				if not same_path(old, target) then
 					vim.cmd.cd(vim.fn.fnameescape(target))
+					swap_editor_windows(old)
 				end
 				follow_in_current_tab()
 			end)
@@ -248,3 +392,112 @@ vim.api.nvim_create_autocmd("TabEnter", {
 		vim.schedule(follow_in_current_tab)
 	end,
 })
+
+-- Leaving git views. Tabs showing the diff view or Neogit are marked in vim.t.git_view (above);
+-- every other tab is for editing.
+
+local function last_file_buffer()
+	local cwd, best = vim.fn.getcwd(), nil
+	for _, info in ipairs(vim.fn.getbufinfo({ buflisted = 1 })) do
+		if info.name ~= "" and vim.bo[info.bufnr].buftype == "" and vim.fs.relpath(cwd, info.name) then
+			if not best or info.lastused > best.lastused then
+				best = info
+			end
+		end
+	end
+	return best and best.bufnr
+end
+
+-- Go to an editing tab, creating one when every tab is a git view.
+function M.editor_tab()
+	for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+		if not vim.t[tab].git_view then
+			vim.api.nvim_set_current_tabpage(tab)
+			return
+		end
+	end
+	vim.cmd("tabnew")
+end
+
+-- Close the git view in the current tab. Returns false when the tab is not one.
+function M.close_view()
+	local tab = vim.api.nvim_get_current_tabpage()
+	if vim.t[tab].git_view == "codediff" then
+		require("codediff.ui.lifecycle").close(tab)
+	elseif vim.t[tab].git_view == "neogit" then
+		if #vim.api.nvim_list_tabpages() == 1 then
+			vim.cmd("tabnew")
+		end
+		vim.cmd(vim.api.nvim_tabpage_get_number(tab) .. "tabclose")
+	else
+		return false
+	end
+	return true
+end
+
+-- ALT up / down in the diff view: step to the next or previous change, running on into the next
+-- file. Returns false at the very first or last change, so the move can go on to the window or pane
+-- beyond (configs/keymaps.lua). codediff's own next/prev file report success even at the ends, so
+-- the edge is worked out here from its explorer and the current file's changes.
+function M.step_hunk(direction)
+	local lifecycle = require("codediff.ui.lifecycle")
+	local tab = vim.api.nvim_get_current_tabpage()
+	local session, panel = lifecycle.get_session(tab), lifecycle.get_panel(tab)
+	local explorer = panel and panel.view
+	if not (session and explorer and explorer.tree) then
+		return false
+	end
+	local files = require("codediff.ui.explorer.tree").get_all_files(explorer.tree)
+	local index = 0
+	for i, file in ipairs(files) do
+		if file.data.path == explorer.data.current_file_path and file.data.group == explorer.data.current_file_group then
+			index = i
+		end
+	end
+	local down = direction == "Down"
+	local last_file = down and index >= #files or not down and index <= 1
+
+	-- Is there a change past the cursor in this file?
+	local changes = session.stored_diff_result and session.stored_diff_result.changes or {}
+	local buf = vim.api.nvim_get_current_buf()
+	local original = buf == session.original_bufnr and session.layout ~= "inline"
+	local win = (buf == session.original_bufnr or buf == session.modified_bufnr) and 0 or session.modified_win
+	local line = win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_cursor(win)[1] or 1
+	local more = false
+	for _, change in ipairs(changes) do
+		local start = (original and change.original or change.modified).start_line
+		if down and start > line or not down and start < line then
+			more = true
+		end
+	end
+
+	if not more and last_file then
+		return false
+	end
+	local codediff = require("codediff")
+	if down then
+		codediff.next_hunk()
+	else
+		codediff.prev_hunk()
+	end
+	return true
+end
+
+-- Closing the last git view leaves an empty buffer; show the last used file of the project instead.
+vim.api.nvim_create_autocmd("User", {
+	group = group,
+	pattern = "CodeDiffClose",
+	callback = function()
+		vim.schedule(function()
+			local buf = vim.api.nvim_get_current_buf()
+			local empty = vim.api.nvim_buf_get_name(buf) == "" and vim.bo[buf].buftype == ""
+				and vim.api.nvim_buf_line_count(buf) == 1 and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
+			local file = empty and not vim.t.git_view and last_file_buffer()
+			if file then
+				vim.api.nvim_set_current_buf(file)
+			end
+		end)
+	end,
+})
+
+return M

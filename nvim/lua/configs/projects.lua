@@ -27,6 +27,11 @@ local function open_project(path)
 	end
 	vim.cmd("cd " .. vim.fn.fnameescape(path))
 	vim.cmd("edit .")
+	-- This Neovim now belongs to the project: it follows the agents working in it (packs/git.lua).
+	local ok, git = pcall(require, "packs.git")
+	if ok then
+		git.set_home(path)
+	end
 end
 
 vim.api.nvim_create_user_command("Projects", function()
