@@ -18,6 +18,8 @@ local schemes = {
 	idle = { fg = "#4F8F4F", dim = "#2E4E2E", bg = "#0B100B", focus = "#121B12" },
 	purple = { fg = "#A58BD3", dim = "#6A5A88", bg = "#15111D", focus = "#201A2D" },
 	orange = { fg = "#E0955A", dim = "#8E5F3A", bg = "#1C130B", focus = "#2A1C10" },
+	-- Commands and messages: Neovim's command line, an agent receiving a message.
+	red = { fg = "#E06C75", dim = "#8E4A4F", bg = "#1E1012", focus = "#2C1519" },
 }
 
 -- Panes whose "done" state has been looked at, keyed by pane id.
@@ -136,6 +138,15 @@ local function agent_info(pane)
 	elseif state == "working" and glyph == "✳" then
 		state = "idle"
 	end
+	-- A received message shows until the reply is done (bin/agent-message); a permission prompt
+	-- during the reply still shows as waiting.
+	if state ~= "waiting" then
+		local marker = io.open(state_dir .. "/" .. id .. ".message")
+		if marker then
+			marker:close()
+			state = "message"
+		end
+	end
 	-- Ignore a stale file left behind when the agent exited without a SessionEnd hook.
 	if not foreground_process(pane):find(agent, 1, true) then
 		return nil
@@ -164,6 +175,7 @@ local badges = {
 	waiting = { label = "waiting", scheme = schemes.orange },
 	done = { label = "done", scheme = schemes.green },
 	idle = { label = "idle", scheme = schemes.idle },
+	message = { label = "message", scheme = schemes.red },
 }
 
 local function badge(state, pane_id, is_active)
@@ -283,6 +295,7 @@ local mode_schemes = {
 	select = schemes.orange,
 	["s-line"] = schemes.orange,
 	replace = schemes.orange,
+	command = schemes.red,
 }
 
 local function mode_badge(mode)
