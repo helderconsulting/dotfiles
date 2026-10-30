@@ -6,6 +6,9 @@
 # Run from a PreToolUse hook with matcher SendMessage; the hook JSON on stdin names the recipient
 # ("to"): a session name, possibly with " [ref]", or "uds:/tmp/cc-socks/<pid>.sock".
 
+# Claude Code may run hooks with the minimal app PATH (when started from WezTerm itself); jq and
+# wezterm come from Homebrew.
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status"
 to=$(jq -r '.tool_input.to // empty' 2>/dev/null)
 [ -n "$to" ] || exit 0

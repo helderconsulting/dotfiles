@@ -11,6 +11,9 @@
 # Nothing is written to the pane's terminal: an escape sequence written there can land in the
 # middle of the agent's own output and come out garbled.
 
+# Claude Code may run hooks with the minimal app PATH (when started from WezTerm itself); jq and
+# wezterm come from Homebrew.
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 [ -n "$WEZTERM_PANE" ] || exit 0
 
 state=$1

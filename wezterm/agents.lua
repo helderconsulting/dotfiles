@@ -428,12 +428,50 @@ function M.apply(config)
 	-- CTRL|ALT Enter splits right like CTRL|ALT h and starts an agent there, then a shell so the pane
 	-- survives the agent exiting. Started as the shell's command rather than typed in, since zsh
 	-- prompts start in vi normal mode.
+	-- A login shell, like WezTerm's own panes: WezTerm runs with the minimal app PATH, the login
+	-- shell adds Homebrew's (nvim, claude's hooks need jq and wezterm).
 	local shell = os.getenv("SHELL") or "zsh"
+	local function run(program)
+		return { shell, "-lic", program .. "; exec " .. shell .. " -l" }
+	end
 	table.insert(config.keys, {
 		mods = "CTRL|ALT",
 		key = "Enter",
 		action = wezterm.action_callback(function(_, pane)
-			pane:split({ direction = "Right", args = { shell, "-ic", "claude; exec " .. shell } })
+			pane:split({ direction = "Right", args = run("claude") })
+		end),
+	})
+
+	-- CTRL|ALT w completes a dashboard, an agent on the left and Neovim on the right, for the focused
+	-- pane's directory: a lone shell becomes one (split both ways, then the shell closes so the two
+	-- end up side by side), Neovim gets an agent on its left, an agent gets Neovim on its right, and a
+	-- tab that already has both (or anything else) gets a new window that AeroSpace tiles. Neovim
+	-- starts from that directory, so it belongs to the project and the agents attach to it
+	-- (nvim/lua/packs/git.lua).
+	table.insert(config.keys, {
+		mods = "CTRL|ALT",
+		key = "w",
+		action = wezterm.action_callback(function(window, pane)
+			local url = pane:get_current_working_dir()
+			local cwd = url and url.file_path or wezterm.home_dir
+			local panes = window:active_tab():panes()
+			local agent, editor
+			for _, p in ipairs(panes) do
+				agent = agent or (agent_info(p) and p)
+				editor = editor or (editor_info(p) and p)
+			end
+			if agent and not editor then
+				agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+			elseif editor and not agent then
+				editor:split({ direction = "Left", cwd = cwd, args = run("claude") })
+			elseif not agent and #panes == 1 then
+				pane:split({ direction = "Left", size = 0.5, cwd = cwd, args = run("claude") })
+				pane:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim") })
+				window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), pane)
+			else
+				local _, new_agent = wezterm.mux.spawn_window({ cwd = cwd, args = run("claude") })
+				new_agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+			end
 		end),
 	})
 
