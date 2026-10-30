@@ -121,6 +121,45 @@ local function shell_info(pane)
 	}
 end
 
+-- The docker view under Neovim (CTRL|ALT w, nvim/lua/configs/docker.lua) reports its section's
+-- entries as tabs and the project its containers come from ("all" when it shows every container) in
+-- the docker_view user var. The tabs read like Neovim's buffers, the current one bright and the rest
+-- dim, and the label is the current one's status in its color, like an agent's state: green when a
+-- container runs or an image or volume is in use, purple while a container is getting there, orange
+-- when it needs a look (or the engine is down), dim when it is stopped or unused.
+local docker_schemes = { ok = schemes.green, busy = schemes.purple, bad = schemes.orange, off = schemes.idle }
+
+local function docker_info(pane)
+	local var = pane:get_user_vars().docker_view
+	if not var or var == "" or not foreground_process(pane):find("n?vim$") then
+		return nil
+	end
+	local ok, view = pcall(wezterm.serde.json_decode, var)
+	view = ok and type(view) == "table" and view or {}
+	local parts, current = {}, nil
+	for i, tab in ipairs(view.tabs or {}) do
+		if i > 1 then
+			table.insert(parts, { text = "   ", tab = i, gap = true })
+		end
+		table.insert(parts, { text = tab.name or "", dim = not tab.current, tab = i })
+		current = tab.current and { index = i, word = tab.word, kind = tab.kind } or current
+	end
+	local label, scheme = current and current.word or "empty", current and docker_schemes[current.kind] or schemes.idle
+	if view.down then
+		label, scheme, parts = "down", schemes.orange, { { text = "docker engine" } }
+	elseif #parts == 0 then
+		parts = { { text = "no " .. (view.section or "containers") } }
+	end
+	return {
+		docker = true,
+		badge = { label = label or "", scheme = scheme },
+		parts = parts,
+		current_tab = current and current.index,
+		worktree = view.project or "",
+		branch = "",
+	}
+end
+
 local function agent_info(pane)
 	local id = pane:pane_id()
 	local fields = read_state(id) or {}
@@ -194,9 +233,10 @@ end
 -- main text, optional details, then where it works (the linked worktree's name, or the branch).
 -- Edge, text and background take the entry's scheme: the color of its state or mode. The focused
 -- one gets a bright edge and a stronger background. Main text and details are lists of { text, dim }
--- parts: an agent's title, a shell's folder or command, or Neovim's buffers and its diagnostics,
--- LSP progress and cursor position. With a width the entry fills exactly that many cells: the main
--- text takes what is left, and the place and details are dropped before it gets too short.
+-- parts: an agent's title, a shell's folder or command, Neovim's buffers and its diagnostics, LSP
+-- progress and cursor position, or the docker view's tabs. With a width the entry fills exactly
+-- that many cells: the main text takes what is left, and the place and details are dropped before
+-- it gets too short. Tabbed parts start late enough that the current tab stays in view.
 local function push_entry(items, b, e, focused, width, number)
 	local c = b.scheme
 	local bg = focused and c.focus or c.bg
@@ -223,7 +263,7 @@ local function push_entry(items, b, e, focused, width, number)
 		end
 		return place ~= "" and w + 5 + wezterm.column_width(place) or w
 	end
-	local main_width = math.min(parts_width(e.parts), e.editor and 80 or 28)
+	local main_width = math.min(parts_width(e.parts), (e.editor or e.docker) and 80 or 28)
 	if width then
 		if place ~= "" and width - fixed() < 12 then
 			place = ""
@@ -240,8 +280,32 @@ local function push_entry(items, b, e, focused, width, number)
 	seg(c.fg, bg, label)
 	table.insert(items, "ResetAttributes")
 	seg(bg, bg, " ")
+	local parts = e.parts
+	if e.current_tab then
+		local start, used = 1, 0
+		for _, part in ipairs(parts) do
+			if part.tab <= e.current_tab then
+				used = used + wezterm.column_width(part.text)
+			end
+		end
+		while used > main_width and start < e.current_tab do
+			for _, part in ipairs(parts) do
+				-- The tab and the gap after it; its own gap went with the tab before.
+				if (part.tab == start and not part.gap) or (part.tab == start + 1 and part.gap) then
+					used = used - wezterm.column_width(part.text)
+				end
+			end
+			start = start + 1
+		end
+		parts = {}
+		for _, part in ipairs(e.parts) do
+			if part.tab >= start and not (part.tab == start and part.gap) then
+				table.insert(parts, part)
+			end
+		end
+	end
 	local left = main_width
-	for _, part in ipairs(e.parts) do
+	for _, part in ipairs(parts) do
 		if left <= 0 then
 			break
 		end
@@ -274,7 +338,7 @@ local function bar_entries(window)
 	local active_tab = window:active_tab()
 	for _, tab in ipairs(window:mux_window():tabs()) do
 		for _, p in ipairs(tab:panes_with_info()) do
-			local info = agent_info(p.pane) or editor_info(p.pane) or shell_info(p.pane)
+			local info = agent_info(p.pane) or docker_info(p.pane) or editor_info(p.pane) or shell_info(p.pane)
 			if info then
 				info.pane = p.pane
 				info.active_tab = tab:tab_id() == active_tab:tab_id()
@@ -313,9 +377,20 @@ local bar_font_size = font_size * 22 / 21.6
 local function bar_items(window, entries)
 	local items, order = {}, {}
 	local function entry(e, width)
-		local b = e.mode and mode_badge(e.mode) or badge(e.state, e.pane:pane_id(), e.focused)
+		local b = e.badge or e.mode and mode_badge(e.mode) or badge(e.state, e.pane:pane_id(), e.focused)
 		table.insert(order, e.pane:pane_id())
 		push_entry(items, b, e, e.focused, width, #order <= 9 and #order or nil)
+	end
+	-- Cells an entry takes at natural width (numbered, unfocused).
+	local function natural_width(e)
+		local scratch, w = {}, 0
+		push_entry(scratch, e.badge, e, false, nil, 1)
+		for _, item in ipairs(scratch) do
+			if type(item) == "table" and item.Text then
+				w = w + wezterm.column_width(item.Text)
+			end
+		end
+		return w
 	end
 
 	local columns, by_left = {}, {}
@@ -344,9 +419,23 @@ local function bar_items(window, entries)
 		if #col.entries == 0 then
 			filler(items, width)
 		end
+		-- A docker entry sharing its column (the docker view under Neovim) keeps its natural width, up to
+		-- half the column; the other entries share the rest and the last one takes what is left.
+		local sizes, rest, flexible = {}, width, 0
 		for j, e in ipairs(col.entries) do
-			local share = math.floor(width / #col.entries)
-			entry(e, j < #col.entries and share or width - share * (#col.entries - 1))
+			if e.docker and #col.entries > 1 then
+				sizes[j] = math.min(natural_width(e), math.floor(width / 2))
+				rest = rest - sizes[j]
+			else
+				flexible = flexible + 1
+			end
+		end
+		local share = flexible > 0 and math.floor(rest / flexible) or 0
+		local used = 0
+		for j, e in ipairs(col.entries) do
+			local w = j < #col.entries and (sizes[j] or share) or width - used
+			used = used + w
+			entry(e, w)
 		end
 	end
 
@@ -447,7 +536,9 @@ function M.apply(config)
 	-- end up side by side), Neovim gets an agent on its left, an agent gets Neovim on its right, and a
 	-- tab that already has both (or anything else) gets a new window that AeroSpace tiles. Neovim
 	-- starts from that directory, so it belongs to the project and the agents attach to it
-	-- (nvim/lua/packs/git.lua).
+	-- (nvim/lua/packs/git.lua). The right is the application side: the docker view (a Neovim running
+	-- :Docker) goes under Neovim, also in a tab that has both but no docker view yet, and focus stays
+	-- where the dashboard put it.
 	table.insert(config.keys, {
 		mods = "CTRL|ALT",
 		key = "w",
@@ -455,22 +546,38 @@ function M.apply(config)
 			local url = pane:get_current_working_dir()
 			local cwd = url and url.file_path or wezterm.home_dir
 			local panes = window:active_tab():panes()
-			local agent, editor
+			local agent, editor, containers
 			for _, p in ipairs(panes) do
 				agent = agent or (agent_info(p) and p)
-				editor = editor or (editor_info(p) and p)
+				if docker_info(p) then
+					containers = containers or p
+				else
+					editor = editor or (editor_info(p) and p)
+				end
 			end
+			local app, focus
 			if agent and not editor then
-				agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+				app = agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+				focus = app
 			elseif editor and not agent then
-				editor:split({ direction = "Left", cwd = cwd, args = run("claude") })
+				app = editor
+				focus = editor:split({ direction = "Left", cwd = cwd, args = run("claude") })
 			elseif not agent and #panes == 1 then
 				pane:split({ direction = "Left", size = 0.5, cwd = cwd, args = run("claude") })
-				pane:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim") })
+				app = pane:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim") })
+				focus = app
 				window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), pane)
+			elseif agent and editor and not containers then
+				app, focus = editor, pane
 			else
 				local _, new_agent = wezterm.mux.spawn_window({ cwd = cwd, args = run("claude") })
-				new_agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+				app = new_agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
+				focus, containers = app, nil
+			end
+			if app and not containers then
+				-- No shell after it: closing the view (<leader>-) closes the pane.
+				app:split({ direction = "Bottom", size = 0.35, cwd = cwd, args = { shell, "-lic", "nvim +Docker" } })
+				focus:activate()
 			end
 		end),
 	})
