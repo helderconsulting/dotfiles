@@ -68,15 +68,33 @@ vim.api.nvim_create_autocmd("FileChangedShellPost", {
 	end,
 })
 
-vim.api.nvim_create_autocmd({ "BufAdd", "BufEnter" }, {
+local function is_empty_scratch(buf)
+	return vim.api.nvim_buf_is_valid(buf)
+		and vim.api.nvim_buf_get_name(buf) == ""
+		and vim.bo[buf].buftype == ""
+		and not vim.bo[buf].modified
+		and vim.api.nvim_buf_line_count(buf) == 1
+		and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
+end
+
+vim.api.nvim_create_autocmd({ "BufAdd", "BufEnter", "BufWinEnter", "BufDelete", "BufHidden" }, {
 	group = vim.api.nvim_create_augroup("UnlistedScratchBuffers", { clear = true }),
-	callback = function(args)
-		local buf = args.buf
-		local name = vim.api.nvim_buf_get_name(buf)
-		local buftype = vim.bo[buf].buftype
-		if name == "" or buftype ~= "" then
-			vim.bo[buf].buflisted = false
-		end
+	callback = function()
+		-- schedule: the buffer list is not final while these events fire
+		vim.schedule(function()
+			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+				if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buflisted then
+					local name = vim.api.nvim_buf_get_name(buf)
+					if name == "" or vim.bo[buf].buftype ~= "" then
+						vim.bo[buf].buflisted = false
+					end
+				end
+				-- wipe leftover empty [No Name] buffers that are not on screen
+				if is_empty_scratch(buf) and vim.fn.bufwinid(buf) == -1 then
+					pcall(vim.api.nvim_buf_delete, buf, {})
+				end
+			end
+		end)
 	end,
 })
 

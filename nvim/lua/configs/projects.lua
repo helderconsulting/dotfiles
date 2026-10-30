@@ -30,7 +30,11 @@ local function open_project(path)
 end
 
 vim.api.nvim_create_user_command("Projects", function()
-	local ok, fzf = pcall(require, "fzf-lua")
+	-- packs.fzf is normally loaded on VimEnter; load it here in case this runs first
+	local ok, fzf = pcall(function()
+		require("packs.fzf")
+		return require("fzf-lua")
+	end)
 	if not ok then
 		vim.notify("fzf-lua not available", vim.log.levels.WARN)
 		return
@@ -72,7 +76,15 @@ vim.keymap.set("n", "<leader>pn", ":ProjectNew<cr>", { desc = "new project" })
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("ProjectsStart", { clear = true }),
 	callback = function()
-		if vim.fn.argc() == 0 and vim.api.nvim_buf_get_name(0) == "" then
+		if vim.fn.argc() ~= 0 or vim.api.nvim_buf_get_name(0) ~= "" then
+			return
+		end
+		-- Inside a repo, start on the live diff of the working tree; elsewhere pick a project.
+		-- packs.git is normally loaded on a later VimEnter handler; load it here first.
+		if vim.fs.root(0, ".git") then
+			require("packs.git")
+			vim.cmd("CodeDiff")
+		else
 			vim.cmd("Projects")
 		end
 	end,

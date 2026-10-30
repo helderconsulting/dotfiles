@@ -3,7 +3,6 @@ vim.api.nvim_create_autocmd("LspAttach", {
 	callback = function(args)
 		local client = vim.lsp.get_client_by_id(args.data.client_id)
 		if client then
-			client.server_capabilities.semanticTokensProvider = nil
 			if client.name == "typescript_ls" or client.name == "vtsls" then
 				client.server_capabilities.documentFormattingProvider = false
 				client.server_capabilities.documentRangeFormattingProvider = false
@@ -34,16 +33,31 @@ vim.api.nvim_create_autocmd("LspAttach", {
 				})
 			end
 
-			vim.keymap.set("n", "<leader>d", vim.lsp.buf.definition, { desc = "go to definition", buf = args.buf })
-			vim.keymap.set("n", "<leader>i", vim.lsp.buf.implementation, { desc = "go to implementation", buffer = args.buf })
-			vim.keymap.set("n", "<leader>r", vim.lsp.buf.references, { desc = "go to references", buf = args.buf })
-			vim.keymap.set("n", "<leader>l", vim.lsp.codelens.run, { desc = "run codelens", buf = args.buf })
-			vim.keymap.set(
-				"n",
-				"<leader>T",
-				vim.lsp.buf.type_definition,
-				{ desc = "go to type definition", buffer = args.buf }
-			)
+			if client:supports_method("textDocument/definition") then
+				vim.keymap.set("n", "<leader>d", vim.lsp.buf.definition, { desc = "go to definition", buf = args.buf })
+			end
+			if client:supports_method("textDocument/implementation") then
+				vim.keymap.set(
+					"n",
+					"<leader>i",
+					vim.lsp.buf.implementation,
+					{ desc = "go to implementation", buffer = args.buf }
+				)
+			end
+			if client:supports_method("textDocument/references") then
+				vim.keymap.set("n", "<leader>R", vim.lsp.buf.references, { desc = "go to references", buf = args.buf })
+			end
+			if client:supports_method("textDocument/codeLens") then
+				vim.keymap.set("n", "<leader>l", vim.lsp.codelens.run, { desc = "run codelens", buf = args.buf })
+			end
+			if client:supports_method("textDocument/typeDefinition") then
+				vim.keymap.set(
+					"n",
+					"<leader>T",
+					vim.lsp.buf.type_definition,
+					{ desc = "go to type definition", buffer = args.buf }
+				)
+			end
 		end
 	end,
 })
@@ -63,4 +77,10 @@ vim.lsp.enable({
 	"svelte_ls",
 	"markdown_ls",
 	"go_ls",
+	"css_ls",
+	"css_variables",
+	"cssmodules_ls",
+	"html_ls",
+	"emmet_ls",
+	"postgres_ls",
 })

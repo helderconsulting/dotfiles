@@ -2,6 +2,7 @@ local wezterm = require("wezterm")
 local config = wezterm.config_builder()
 
 config.font = wezterm.font("JetBrains Mono")
+config.font_size = 18
 config.color_scheme = "green"
 config.enable_tab_bar = false
 config.window_decorations = "RESIZE"
@@ -12,10 +13,8 @@ config.window_padding = {
 	bottom = 0,
 }
 
-config.use_fancy_tab_bar = false
 config.tab_bar_at_bottom = false
 config.hide_tab_bar_if_only_one_tab = true
-config.tab_max_width = 32
 
 config.native_macos_fullscreen_mode = true
 
@@ -36,5 +35,7 @@ config.keys = {
 	{ mods = "CTRL|ALT", key = "e", action = navigate("Up", "Prev") },
 	{ mods = "CTRL|ALT", key = "o", action = navigate("Down", "Next") },
 }
+
+require("agents").apply(config)
 
 return config

@@ -33,6 +33,7 @@ ts.install({
 	"vimdoc",
 	"bash",
 	"typescript",
+	"tsx",
 	"json",
 	"rust",
 	"dockerfile",
@@ -44,6 +45,7 @@ ts.install({
 	"http",
 	"go",
 	"markdown",
+	"sql",
 })
 
 require("nvim-treesitter-textobjects").setup({

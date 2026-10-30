@@ -14,6 +14,15 @@ vim.api.nvim_create_autocmd("FileType", {
 local oil = require("oil")
 oil.setup({
 	default_file_explorer = true,
+	columns = {
+		{
+			"icon",
+			-- one colour for every icon: the theme's string green
+			highlight = function()
+				return "String"
+			end,
+		},
+	},
 	view_options = {
 		show_hidden = true,
 		is_hidden_file = function(name, bufnr)
@@ -28,6 +37,15 @@ oil.setup({
 	},
 })
 vim.keymap.set("n", "-", function()
-	vim.cmd("vsplit")
+	local buf = vim.api.nvim_get_current_buf()
+	local empty = vim.api.nvim_buf_get_name(buf) == ""
+		and vim.bo[buf].buftype == ""
+		and not vim.bo[buf].modified
+		and vim.api.nvim_buf_line_count(buf) == 1
+		and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
+	-- reuse an empty buffer's window instead of leaving it behind in a split
+	if not empty then
+		vim.cmd("vsplit")
+	end
 	require("oil").open()
 end, { desc = "Open parent directory" })

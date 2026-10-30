@@ -17,8 +17,8 @@ vim.api.nvim_create_autocmd({ "BufReadPost", "BufNewFile" }, {
 		require("packs.treesitter")
 		require("packs.undotree")
 		require("packs.conform")
-		require("packs.db")
 		require("packs.paste")
+		require("packs.markdown-renderer")
 	end,
 })
 

@@ -1,6 +1,7 @@
 vim.pack.add({
 	"https://github.com/nvim-neotest/neotest.git",
 	"https://github.com/nvim-neotest/neotest-jest.git",
+	"https://github.com/marilari88/neotest-vitest.git",
 	"https://github.com/fredrikaverpil/neotest-golang",
 	"https://github.com/nvim-neotest/nvim-nio",
 })
@@ -27,6 +28,23 @@ neotest.setup({
 				end
 
 				return vim.fn.getcwd() .. "/jest.config.ts"
+			end,
+		}),
+		require("neotest-vitest")({
+			is_test_file = function(path)
+				return path:match("%.test%.[jt]sx?$") ~= nil
+			end,
+			cwd = function(file)
+				local root = vim.fn.getcwd()
+				local found = vim.fs.find(function(name)
+					return name:match("^vitest%.config%.[cm]?[jt]s$") or name:match("^vite%.config%.[cm]?[jt]s$")
+				end, { path = vim.fs.dirname(file), upward = true, stop = vim.fs.dirname(root) })[1]
+
+				if found then
+					return vim.fs.dirname(found)
+				end
+
+				return root
 			end,
 		}),
 	},

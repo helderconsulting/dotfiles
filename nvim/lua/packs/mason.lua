@@ -23,6 +23,13 @@ require("mason").setup({
 		"selene",
 		"prettier",
 		"stylua",
+		"postgres-language-server",
+		"sql-formatter",
+		"css-lsp",
+		"css-variables-language-server",
+		"cssmodules-language-server",
+		"html-lsp",
+		"emmet-language-server",
 	},
 })
 vim.keymap.set("n", "<leader>L", function()
