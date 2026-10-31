@@ -162,6 +162,9 @@ local function docker_info(pane)
 	end
 	return {
 		docker = true,
+		-- The view's menu width plus its split line, so the entry sits right under the menu. Not
+		-- width: bar_entries sets that to the pane's.
+		menu_width = tonumber(view.width),
 		badge = { label = label or "", scheme = scheme },
 		parts = parts,
 		current_tab = current and current.index,
@@ -216,6 +219,7 @@ local function agent_info(pane)
 		root = fields[3] or "",
 		branch = fields[4] or "",
 		worktree = fields[5] or "",
+		session = fields[7] ~= "" and fields[7] or nil,
 	}
 end
 
@@ -429,12 +433,13 @@ local function bar_items(window, entries)
 		if #col.entries == 0 then
 			filler(items, width)
 		end
-		-- A docker entry sharing its column (the docker view under Neovim) keeps its natural width, up to
-		-- half the column; the other entries share the rest and the last one takes what is left.
+		-- A docker entry sharing its column (the docker view under Neovim) is as wide as the view's menu
+		-- (or its natural width without one), up to half the column; the other entries share the rest
+		-- and the last one takes what is left.
 		local sizes, rest, flexible = {}, width, 0
 		for j, e in ipairs(col.entries) do
 			if e.docker and #col.entries > 1 then
-				sizes[j] = math.min(natural_width(e), math.floor(width / 2))
+				sizes[j] = math.min(e.menu_width or natural_width(e), math.floor(width / 2))
 				rest = rest - sizes[j]
 			else
 				flexible = flexible + 1
@@ -455,6 +460,83 @@ local function bar_items(window, entries)
 		end
 	end
 	return items, order
+end
+
+local function cwd_of(p)
+	local url = p:get_current_working_dir()
+	return url and url.file_path:gsub("/$", "") or nil
+end
+
+-- What a tab holds: its agents (with their state), Neovim, the docker view, or a lone idle shell.
+local function tab_parts(tab)
+	local t = { panes = tab:panes(), agents = {} }
+	for _, p in ipairs(t.panes) do
+		local a = agent_info(p)
+		if a then
+			table.insert(t.agents, { pane = p, info = a })
+		elseif docker_info(p) then
+			t.containers = t.containers or p
+		elseif editor_info(p) then
+			t.editor = t.editor or p
+		end
+	end
+	t.agent = t.agents[1] and t.agents[1].pane
+	local only = #t.panes == 1 and t.panes[1]
+	if only and not t.agent and not t.editor and not t.containers then
+		local proc = (foreground_process(only):match("([^/]+)$") or ""):gsub("^%-", "")
+		t.shell = shells[proc] and only or nil
+	end
+	t.root = (t.editor and cwd_of(t.editor)) or (t.agents[1] and t.agents[1].info.root ~= "" and t.agents[1].info.root)
+		or cwd_of(t.panes[1])
+		or ""
+	return t
+end
+
+-- The workspaces (tabs with an agent or Neovim) in every window, as JSON for Neovim's workspaces
+-- and sessions sections (nvim/lua/configs/workspaces.lua): their tab, folder, panes, and agents
+-- with their state and session.
+local last_workspaces
+local function record_workspaces()
+	local list = {}
+	for _, mw in ipairs(wezterm.mux.all_windows()) do
+		for _, tab in ipairs(mw:tabs()) do
+			local t = tab_parts(tab)
+			if t.agent or t.editor then
+				local w = {
+					window = mw:window_id(),
+					tab = tab:tab_id(),
+					root = t.root,
+					editor = t.editor ~= nil,
+					docker = t.containers ~= nil,
+					panes = {},
+					agents = {},
+				}
+				for _, p in ipairs(t.panes) do
+					table.insert(w.panes, p:pane_id())
+				end
+				for _, a in ipairs(t.agents) do
+					table.insert(w.agents, {
+						pane = a.pane:pane_id(),
+						agent = a.info.agent,
+						state = a.info.state,
+						title = a.info.title,
+						session = a.info.session or "",
+					})
+				end
+				table.insert(list, w)
+			end
+		end
+	end
+	local text = wezterm.serde.json_encode(list)
+	if text ~= last_workspaces then
+		local f = io.open(state_dir .. "/workspaces.tmp", "w")
+		if f then
+			f:write(text)
+			f:close()
+			os.rename(state_dir .. "/workspaces.tmp", state_dir .. "/workspaces")
+			last_workspaces = text
+		end
+	end
 end
 
 local last_focus
@@ -479,6 +561,14 @@ end
 -- pane last used in WezTerm and then the one on the side you came from, and passing through an
 -- agent pane must not move Neovim to its project.
 local pending_focus
+local function write_focus(focus)
+	local f = io.open(state_dir .. "/focus", "w")
+	if f then
+		f:write(focus, "\n")
+		f:close()
+		last_focus = focus
+	end
+end
 local function record_focus(agents)
 	local focus
 	for _, a in ipairs(agents) do
@@ -494,12 +584,7 @@ local function record_focus(agents)
 		if pending_focus ~= focus or focus == last_focus then
 			return
 		end
-		local f = io.open(state_dir .. "/focus", "w")
-		if f then
-			f:write(focus, "\n")
-			f:close()
-			last_focus = focus
-		end
+		write_focus(focus)
 	end)
 end
 
@@ -508,6 +593,7 @@ local function refresh(window)
 	record_focus(entries)
 	local items, order = bar_items(window, entries)
 	record_order(order)
+	record_workspaces()
 	window:set_left_status(wezterm.format(items))
 
 	-- Only show the bar while there is something in it.
@@ -528,10 +614,12 @@ function M.apply(config)
 	-- survives the agent exiting. Started as the shell's command rather than typed in, since zsh
 	-- prompts start in vi normal mode.
 	-- A login shell, like WezTerm's own panes: WezTerm runs with the minimal app PATH, the login
-	-- shell adds Homebrew's (nvim, claude's hooks need jq and wezterm).
+	-- shell adds Homebrew's (nvim, claude's hooks need jq and wezterm). With cwd it starts there:
+	-- pane:split ignores cwd when given args, the new pane starts in the split pane's folder.
 	local shell = os.getenv("SHELL") or "zsh"
-	local function run(program)
-		return { shell, "-lic", program .. "; exec " .. shell .. " -l" }
+	local function run(program, cwd, keep)
+		local cd = cwd and "cd " .. wezterm.shell_quote_arg(cwd) .. " && " or ""
+		return { shell, "-lic", cd .. program .. (keep == false and "" or "; exec " .. shell .. " -l") }
 	end
 	table.insert(config.keys, {
 		mods = "CTRL|ALT",
@@ -541,59 +629,382 @@ function M.apply(config)
 		end),
 	})
 
-	-- CTRL|ALT w completes a dashboard, an agent on the left and Neovim on the right, for the focused
-	-- pane's directory: a lone shell becomes one (split both ways, then the shell closes so the two
-	-- end up side by side), Neovim gets an agent on its left, an agent gets Neovim on its right, and a
-	-- tab that already has both (or anything else) gets a new window that AeroSpace tiles. Neovim
-	-- starts from that directory, so it belongs to the project and the agents attach to it
-	-- (nvim/lua/packs/git.lua). The right is the application side: the docker view (a Neovim running
-	-- :Docker) goes under Neovim, also in a tab that has both but no docker view yet, and focus stays
-	-- where the dashboard put it.
+	-- Workspaces: a tab holding a project's agent and Neovim, with the docker view under Neovim.
+	-- CTRL|ALT w starts one, from a project or an earlier Claude session, or goes back to one still
+	-- running; CTRL|ALT q closes it and leaves a plain shell.
+	local projects_root = wezterm.home_dir .. "/Code"
+	local agents = { claude = "claude", resume = "claude --resume" }
+	local function agent_command(mode)
+		local session = mode:match("^session:(.+)$")
+		return session and "claude --resume " .. session or agents[mode]
+	end
+
+	local function escape(s)
+		return (s:gsub("%p", "%%%0"))
+	end
+	local function short(path)
+		path = path:gsub("/$", "")
+		path = path:gsub("^" .. escape(projects_root) .. "/", "")
+		path = path:gsub("^" .. escape(wezterm.home_dir), "~")
+		return path
+	end
+	-- Directories in ~/Code two levels deep, like Neovim's :Projects. fd skips gitignored folders
+	-- (node_modules); full paths since WezTerm runs without Homebrew's PATH.
+	local function list_projects()
+		local ok, success, out = pcall(wezterm.run_child_process, { "/opt/homebrew/bin/fd", "-t", "d", "-d", "2", ".", projects_root })
+		if not (ok and success) then
+			ok, success, out = pcall(wezterm.run_child_process, {
+				"/usr/bin/find", projects_root, "-mindepth", "1", "-maxdepth", "2", "-type", "d", "-not", "-path", "*/.*",
+			})
+		end
+		local list = {}
+		for line in ((ok and success and out) or ""):gmatch("[^\n]+") do
+			table.insert(list, (line:gsub("/$", "")))
+		end
+		table.sort(list)
+		return list
+	end
+
+	local function label(parts)
+		local items = {}
+		for _, part in ipairs(parts) do
+			table.insert(items, { Foreground = { Color = part[2] } })
+			table.insert(items, { Text = part[1] })
+		end
+		return wezterm.format(items)
+	end
+
+	local function pick(window, pane, title, choices, on_pick)
+		window:perform_action(
+			wezterm.action.InputSelector({
+				title = title,
+				choices = choices,
+				fuzzy = true,
+				action = wezterm.action_callback(function(w, p, id)
+					if id then
+						on_pick(w, p, id)
+					end
+				end),
+			}),
+			pane
+		)
+	end
+
+	-- Opens a workspace for cwd: mode is "claude" (a new session), "resume" (Claude's session
+	-- picker), "session:<id>" (that session) or "nvim" (Neovim alone, no agent or docker view). A lone shell tab becomes the
+	-- workspace (split both ways, then the shell closes so the two end up side by side); with here
+	-- set, the current tab is completed instead: an agent gets Neovim on its right, Neovim an agent on
+	-- its left, a tab with both the docker view. A session from the current tab's folder counts as
+	-- here and joins it, under the agents already there. Anything else gets a new tab. Neovim starts
+	-- from cwd, so it belongs to the project and the agents attach to it (nvim/lua/packs/git.lua).
+	local cli = wezterm.executable_dir .. "/wezterm"
+	local function open(window, pane, cwd, mode, here)
+		local t = tab_parts(window:active_tab())
+		local agent = agent_command(mode)
+		local session = mode:match("^session:") ~= nil
+		here = here or (session and t.root == (cwd:gsub("/$", "")))
+		local app, focus, containers = nil, nil, t.containers
+		if t.shell then
+			if agent then
+				t.shell:split({ direction = "Left", size = 0.5, cwd = cwd, args = run(agent, cwd) })
+			end
+			app = t.shell:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim", cwd) })
+			focus = app
+			-- CloseCurrentPane closes the active pane, whatever pane it's given, and the split made
+			-- Neovim active.
+			t.shell:activate()
+			window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), t.shell)
+		elseif here and session and t.agent then
+			app = t.editor or t.agent:split({ direction = "Right", cwd = cwd, args = run("nvim", cwd) })
+			focus = t.agents[#t.agents].pane:split({ direction = "Bottom", cwd = cwd, args = run(agent, cwd) })
+		elseif here and t.agent and not t.editor then
+			app = t.agent:split({ direction = "Right", cwd = cwd, args = run("nvim", cwd) })
+			focus = app
+		elseif here and t.editor and not t.agent and agent then
+			-- A docker view spanning the tab under Neovim would end up under the agent too, so it closes
+			-- and comes back under Neovim below. Not a top_level split: WezTerm sizes that pane a column
+			-- wider than it is, and splitting it again fails with "No space for split".
+			if containers then
+				wezterm.run_child_process({ cli, "cli", "kill-pane", "--pane-id", tostring(containers:pane_id()) })
+				containers = nil
+			end
+			app = t.editor
+			focus = t.editor:split({ direction = "Left", size = 0.5, cwd = cwd, args = run(agent, cwd) })
+		elseif here and t.agent and t.editor then
+			app, focus = t.editor, pane
+		else
+			local tab, first = window:mux_window():spawn_tab({ cwd = cwd, args = run(agent or "nvim", cwd) })
+			tab:activate()
+			app = agent and first:split({ direction = "Right", cwd = cwd, args = run("nvim", cwd) }) or first
+			focus, containers = app, nil
+		end
+		-- The right is the application side: the docker view (a Neovim running :Docker) goes under
+		-- Neovim. No shell after it: closing the view (<leader>-) closes the pane.
+		if mode ~= "nvim" and not containers then
+			app:split({ direction = "Bottom", size = 0.35, cwd = cwd, args = run("nvim +Docker", cwd, false) })
+			focus:activate()
+		end
+	end
+
+	-- Bring a workspace's tab and window forward.
+	local function switch(mw, tab)
+		tab:activate()
+		local gui = mw:gui_window()
+		if gui then
+			gui:focus()
+		end
+	end
+
+	local modes = {
+		claude = { "claude + nvim", "a new claude session" },
+		resume = { "resume claude + nvim", "pick an earlier claude session" },
+		nvim = { "nvim", "just an editing session" },
+	}
+	local function pick_mode(window, pane, cwd, here, list)
+		local choices = {}
+		for _, mode in ipairs(list) do
+			table.insert(choices, { id = mode, label = label({ { modes[mode][1], schemes.green.fg }, { "  " .. modes[mode][2], schemes.green.dim } }) })
+		end
+		pick(window, pane, short(cwd), choices, function(w, p, mode)
+			open(w, p, cwd, mode, here)
+		end)
+	end
+
+	-- Recent Claude sessions (bin/claude-sessions): { id, cwd, title, age }.
+	local function list_sessions()
+		local ok, success, out = pcall(wezterm.run_child_process, { wezterm.config_dir .. "/bin/claude-sessions", "20" })
+		local list, now = {}, os.time()
+		for line in ((ok and success and out) or ""):gmatch("[^\n]+") do
+			local mtime, id, cwd, title = line:match("^(%d+)\t([^\t]+)\t([^\t]+)\t(.*)$")
+			if id then
+				local age = now - tonumber(mtime)
+				age = age < 3600 and math.max(1, age // 60) .. "m" or age < 86400 and age // 3600 .. "h" or age // 86400 .. "d"
+				table.insert(list, { id = id, cwd = cwd, title = title, age = age })
+			end
+		end
+		return list
+	end
+
+	-- CTRL|ALT w lists, in order: the current tab when there is something to start or complete there, the
+	-- running workspaces in every window (with their agents' states) to go back to, recent Claude
+	-- sessions to pick up again (in the current workspace when it has their folder, else in a new one
+	-- with Neovim and the docker view), then the projects in
+	-- ~/Code. A project then asks how to open it.
 	table.insert(config.keys, {
 		mods = "CTRL|ALT",
 		key = "w",
 		action = wezterm.action_callback(function(window, pane)
-			local url = pane:get_current_working_dir()
-			local cwd = url and url.file_path or wezterm.home_dir
-			local panes = window:active_tab():panes()
-			local agent, editor, containers
-			for _, p in ipairs(panes) do
-				agent = agent or (agent_info(p) and p)
-				if docker_info(p) then
-					containers = containers or p
-				else
-					editor = editor or (editor_info(p) and p)
+			local current = window:active_tab()
+			local here_cwd = cwd_of(pane) or wezterm.home_dir
+			local t = tab_parts(current)
+			local choices, targets, running = {}, {}, {}
+			for _, a in ipairs(t.agents) do
+				running[a.info.session or ""] = true
+			end
+			local here
+			if t.shell then
+				here = { "start here", { "claude", "resume", "nvim" } }
+			elseif t.agent and not t.editor then
+				here = { "add nvim", { "claude" } }
+			elseif t.editor and not t.agent then
+				here = { "add claude", { "claude", "resume" } }
+			elseif t.agent and t.editor and not t.containers then
+				here = { "add the docker view", { "claude" } }
+			end
+			if here then
+				table.insert(choices, {
+					id = "here",
+					label = label({ { "here    ", schemes.purple.fg }, { here[1], schemes.purple.fg }, { "  " .. short(here_cwd), schemes.purple.dim } }),
+				})
+			end
+
+			for _, mw in ipairs(wezterm.mux.all_windows()) do
+				for _, tab in ipairs(mw:tabs()) do
+					local w = tab_parts(tab)
+					if tab:tab_id() ~= current:tab_id() and (w.agent or w.editor) then
+						local parts = { { "open    ", schemes.green.dim }, { short(w.root), schemes.green.fg } }
+						for _, a in ipairs(w.agents) do
+							local b = badges[a.info.state] or badges.idle
+							table.insert(parts, { "  " .. a.info.agent .. " " .. b.label, b.scheme.fg })
+						end
+						if w.editor then
+							table.insert(parts, { "  nvim", schemes.green.dim })
+						end
+						for _, a in ipairs(w.agents) do
+							running[a.info.session or ""] = true
+						end
+						local id = "tab:" .. tab:tab_id()
+						targets[id] = { window = mw, tab = tab }
+						table.insert(choices, { id = id, label = label(parts) })
+					end
 				end
 			end
-			local app, focus
-			if agent and not editor then
-				app = agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
-				focus = app
-			elseif editor and not agent then
-				app = editor
-				focus = editor:split({ direction = "Left", cwd = cwd, args = run("claude") })
-			elseif not agent and #panes == 1 then
-				pane:split({ direction = "Left", size = 0.5, cwd = cwd, args = run("claude") })
-				app = pane:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim") })
-				focus = app
-				-- CloseCurrentPane closes the active pane, whatever pane it's given, and the split made
-				-- Neovim active.
-				pane:activate()
-				window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), pane)
-			elseif agent and editor and not containers then
-				app, focus = editor, pane
-			else
-				local _, new_agent = wezterm.mux.spawn_window({ cwd = cwd, args = run("claude") })
-				app = new_agent:split({ direction = "Right", cwd = cwd, args = run("nvim") })
-				focus, containers = app, nil
+
+			local sessions = {}
+			for _, s in ipairs(list_sessions()) do
+				if running[s.id] then
+					goto continue
+				end
+				local id = "session:" .. s.id
+				sessions[id] = s
+				table.insert(choices, {
+					id = id,
+					label = label({
+						{ "resume  ", schemes.purple.dim },
+						{ short(s.cwd), schemes.purple.fg },
+						{ "  " .. s.title, schemes.green.fg },
+						{ "  " .. s.age, schemes.green.dim },
+					}),
+				})
+				::continue::
 			end
-			if app and not containers then
-				-- No shell after it: closing the view (<leader>-) closes the pane.
-				app:split({ direction = "Bottom", size = 0.35, cwd = cwd, args = { shell, "-lic", "nvim +Docker" } })
-				focus:activate()
+
+			for _, dir in ipairs(list_projects()) do
+				table.insert(choices, { id = "dir:" .. dir, label = label({ { "new     ", schemes.idle.dim }, { short(dir), schemes.idle.fg } }) })
 			end
+
+			pick(window, pane, "workspaces", choices, function(w, p, id)
+				if id == "here" then
+					if #here[2] == 1 then
+						open(w, p, here_cwd, here[2][1], true)
+					else
+						pick_mode(w, p, here_cwd, true, here[2])
+					end
+				elseif sessions[id] then
+					open(w, p, sessions[id].cwd, id, false)
+				elseif targets[id] then
+					switch(targets[id].window, targets[id].tab)
+				else
+					pick_mode(w, p, id:sub(5), false, { "claude", "resume", "nvim" })
+				end
+			end)
 		end),
 	})
+
+	-- A tab with a lone idle shell, made if the mux window has none.
+	local function shell_tab(mw)
+		for _, tab in ipairs(mw:tabs()) do
+			if tab_parts(tab).shell then
+				return tab
+			end
+		end
+		return (mw:spawn_tab({ cwd = wezterm.home_dir }))
+	end
+
+	-- Neovim with unsaved changes, from the buffers it reports (nvim/lua/configs/statusbar.lua).
+	local function unsaved(p)
+		if not editor_info(p) then
+			return false
+		end
+		local ok, status = pcall(wezterm.serde.json_decode, p:get_user_vars().nvim_status or "")
+		for _, buf in ipairs(ok and type(status) == "table" and status.buffers or {}) do
+			if buf.modified then
+				return true
+			end
+		end
+		return false
+	end
+
+	-- Closes a workspace: the agents exit (their sessions stay resumable from CTRL|ALT w), Neovim,
+	-- the docker view and the scripts it runs close with their panes, and when it is the tab on
+	-- screen a plain shell takes its place, so WezTerm stays open. Neovim with unsaved changes is
+	-- shown and asked to quit instead (:confirm qa, so it offers to save); closing again finishes.
+	local function close_workspace(mw, tab)
+		local t = tab_parts(tab)
+		if t.shell then
+			return
+		end
+		for _, p in ipairs(t.panes) do
+			if unsaved(p) then
+				switch(mw, tab)
+				p:activate()
+				p:send_text("\x1b:confirm qa\r")
+				return
+			end
+		end
+		if mw:active_tab():tab_id() == tab:tab_id() then
+			shell_tab(mw):activate()
+		end
+		for _, p in ipairs(t.panes) do
+			wezterm.background_child_process({ cli, "cli", "kill-pane", "--pane-id", tostring(p:pane_id()) })
+		end
+	end
+
+	-- Reloads a workspace: every Neovim in it (the editor and the docker view) runs :restart, which
+	-- starts it again with the same arguments, so config changes take effect; the agents keep
+	-- running. A Neovim with unsaved changes refuses (:restart quits with :qall), so it is shown.
+	local function reload_workspace(mw, tab)
+		for _, p in ipairs(tab_parts(tab).panes) do
+			if editor_info(p) then
+				if unsaved(p) then
+					switch(mw, tab)
+					p:activate()
+				end
+				p:send_text("\x1b:restart\r")
+			end
+		end
+	end
+
+	-- CTRL|ALT r reloads the workspace on screen.
+	table.insert(config.keys, {
+		mods = "CTRL|ALT",
+		key = "r",
+		action = wezterm.action_callback(function(window)
+			reload_workspace(window:mux_window(), window:active_tab())
+		end),
+	})
+
+	-- CTRL|ALT q, next to w, closes the workspace on screen.
+	table.insert(config.keys, {
+		mods = "CTRL|ALT",
+		key = "q",
+		action = wezterm.action_callback(function(window)
+			close_workspace(window:mux_window(), window:active_tab())
+		end),
+	})
+
+	-- Neovim's workspaces and agents sections (nvim/lua/configs/workspaces.lua) ask through the
+	-- workspace user var, tab separated with a clock at the end so a repeat is a change:
+	-- "tab <id>" and "pane <id>" switch there, "open <mode> <folder>" opens a workspace like
+	-- CTRL|ALT w (mode claude, resume, nvim or session:<id>), "close <tab id>" closes one. "follow
+	-- <worktree> <agent pane> <branch>" comes from Neovim's worktree switch (nvim/lua/packs/git.lua):
+	-- it becomes the followed worktree as if that agent was focused (the pane may be empty, a worktree
+	-- without an agent), so focusing any other agent moves Neovim back.
+	local function find_tab(id)
+		for _, mw in ipairs(wezterm.mux.all_windows()) do
+			for _, tab in ipairs(mw:tabs()) do
+				if tab:tab_id() == id then
+					return mw, tab
+				end
+			end
+		end
+	end
+	local function handle_request(window, pane, value)
+		local args = {}
+		for field in (value .. "\t"):gmatch("([^\t]*)\t") do
+			table.insert(args, field)
+		end
+		local kind = args[1]
+		if kind == "tab" or kind == "close" then
+			local mw, tab = find_tab(tonumber(args[2]))
+			if tab and kind == "tab" then
+				switch(mw, tab)
+			elseif tab then
+				close_workspace(mw, tab)
+			end
+		elseif kind == "pane" then
+			local target = wezterm.mux.get_pane(tonumber(args[2]))
+			local mw, tab = find_tab(target and target:tab():tab_id())
+			if tab then
+				switch(mw, tab)
+				target:activate()
+			end
+		elseif kind == "open" and args[3] and args[3] ~= "" then
+			open(window, pane, args[3], args[2], false)
+		elseif kind == "follow" and args[2] and args[2] ~= "" then
+			write_focus(args[2] .. "\t" .. (args[3] or "") .. "\t" .. (args[4] or ""))
+		end
+	end
 
 	-- Tabs and the new-tab button are hidden; the bar only holds agents and Neovim panes.
 	config.use_fancy_tab_bar = true
@@ -632,6 +1043,13 @@ function M.apply(config)
 	-- Neovim reports through user vars: its status (nvim/lua/configs/statusbar.lua), and nav when
 	-- ALT arrows reach its edge ("Left:<n>", the counter makes repeats a change).
 	wezterm.on("user-var-changed", function(window, pane, name, value)
+		if name == "workspace" then
+			local request = value:match("^(.*)\t%d+$")
+			if request then
+				handle_request(window, pane, request)
+			end
+			return
+		end
 		if name == "nav" then
 			local direction = value:match("^(%a+)")
 			if direction then

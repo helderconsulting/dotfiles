@@ -1,0 +1,32 @@
+#!/bin/sh
+# Recent Claude Code sessions, newest first, for the CTRL|ALT w picker (wezterm/agents.lua): modified
+# time, session id, folder and title (the /rename one, else Claude's own, else the last prompt), tab
+# separated. A session's line is cached until its file changes, since the files run to megabytes.
+# Full paths: WezTerm runs this without the shell's PATH.
+#
+#   claude-sessions [count]
+
+n=${1:-20}
+export LC_ALL=C
+cache="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status/sessions"
+mkdir -p "$cache"
+field() {
+	/usr/bin/grep -o "\"$1\":\"[^\"]*\"" | tail -n 1 | sed "s/^\"$1\":\"//; s/\"\$//"
+}
+/bin/ls -t "$HOME"/.claude/projects/*/*.jsonl 2>/dev/null | head -n "$n" | while IFS= read -r f; do
+	id=$(basename "$f" .jsonl)
+	mtime=$(stat -f %m "$f")
+	line=$(cat "$cache/$id" 2>/dev/null)
+	if [ "${line%%	*}" != "$mtime" ]; then
+		titles=$(/usr/bin/grep -E '^\{"type":"(custom-title|ai-title|last-prompt)"' "$f")
+		title=$(printf '%s\n' "$titles" | field customTitle)
+		[ -n "$title" ] || title=$(printf '%s\n' "$titles" | field aiTitle)
+		[ -n "$title" ] || title=$(printf '%s\n' "$titles" | field lastPrompt)
+		cwd=$(/usr/bin/grep -m 1 -o '"cwd":"[^"]*"' "$f" | sed 's/^"cwd":"//; s/"$//')
+		line=$(printf '%s\t%s\t%s\t%s' "$mtime" "$id" "$cwd" "$title")
+		printf '%s\n' "$line" >"$cache/$id"
+	fi
+	cwd=$(printf '%s\n' "$line" | cut -f 3)
+	title=$(printf '%s\n' "$line" | cut -f 4)
+	[ -n "$title" ] && [ -d "$cwd" ] && printf '%s\n' "$line"
+done

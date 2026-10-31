@@ -6,7 +6,14 @@
 -- the desktops logging in as the same user share it, and a desktop without a user has its own. They
 -- reach FreeRDP on its stdin (/args-from:stdin), so never in a file or a command line.
 -- Sessions run detached with their output in a log under Neovim's state folder, and outlive the view.
+-- A desktop reached over the Tailscale VPN (configs/tailscale.lua), like one in a subnet a device of
+-- the tailnet routes, reads "vpn off" while the VPN is down, and opening it connects the VPN first.
 local M = {}
+
+local tailscale = require("configs.tailscale")
+
+-- Desktops being opened, shown as connecting until their session runs.
+local opening = {}
 
 M.dir = vim.fs.normalize("~/.config/desktops")
 local runs = vim.fn.stdpath("state") .. "/desktops"
@@ -84,9 +91,14 @@ function M.fetch(done)
 		if kind == "file" and name then
 			local s = settings(M.dir .. "/" .. file)
 			local pid, code = session(name)
+			local route = tailscale.route(s["full address"])
 			local word, state = "closed", "off"
 			if pid then
 				word, state = "connected", "ok"
+			elseif opening[name] then
+				word, state = "connecting", "busy"
+			elseif route and not tailscale.connected() then
+				word, state = "vpn off", "bad"
 			elseif code and code >= 128 then
 				-- FreeRDP's exit codes from 128 are connection errors (a refused login, an unreachable
 				-- host); the lower ones are ways a session ends.
@@ -104,6 +116,7 @@ function M.fetch(done)
 				host = s["full address"],
 				user = s["username"],
 				gateway = s["gatewayhostname"],
+				route = route,
 			})
 			if passwords[key] == nil and not vim.list_contains(missing, key) then
 				table.insert(missing, key)
@@ -135,6 +148,7 @@ function M.show(entry)
 	row("host", entry.host)
 	row("user", entry.user)
 	row("gateway", entry.gateway)
+	row("vpn", entry.route and (entry.route .. (tailscale.connected() and "" or ", connects first")))
 	local shared = 0
 	for _, d in ipairs(desktops) do
 		shared = shared + (d.account == entry.account and d.name ~= entry.name and 1 or 0)
@@ -209,12 +223,24 @@ local function connect(e, view, password)
 	local f = io.open(path(e.name, "pid"), "w")
 	f:write(tostring(proc.pid))
 	f:close()
+	opening[e.name] = nil
 	view.refresh()
 end
 
 local function open(e, view)
 	if vim.fn.executable("sdl-freerdp") == 0 then
 		return vim.notify("sdl-freerdp is missing: brew install freerdp", vim.log.levels.ERROR)
+	end
+	if e.route and not tailscale.connected() then
+		opening[e.name] = true
+		return tailscale.up(view, function(ok)
+			opening[e.name] = nil
+			if ok then
+				open(e, view)
+			else
+				view.refresh()
+			end
+		end)
 	end
 	if not passwords[e.account] then
 		return ask_password(e.account, function(password)
@@ -339,7 +365,7 @@ M.actions = {
 	{
 		"<leader>d",
 		function(e, view)
-			if vim.fn.confirm("remove desktop " .. e.name .. "?", "&yes\n&no", 2) ~= 1 then
+			if not view.confirm("remove desktop " .. e.name .. "?") then
 				return
 			end
 			os.remove(e.file)

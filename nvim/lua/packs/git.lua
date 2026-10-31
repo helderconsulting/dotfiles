@@ -359,6 +359,18 @@ local function swap_editor_windows(old_root)
 	end
 end
 
+-- Point Neovim at a worktree: its cwd, the editing windows and the git view on screen.
+local function go_to(root)
+	target = root
+	-- Neovim's cwd moves too, so pickers, grep and new files work in that project.
+	local old = vim.fn.getcwd()
+	if not same_path(old, target) then
+		vim.cmd.cd(vim.fn.fnameescape(target))
+		swap_editor_windows(old)
+	end
+	follow_in_current_tab()
+end
+
 -- Only focus changes made while Neovim runs count; a stale file must not move a fresh session.
 vim.fn.mkdir(state_dir, "p")
 -- One write fires several events; act once it settles.
@@ -373,14 +385,7 @@ watcher:start(state_dir, {}, function(_, filename)
 				if not root or vim.fn.isdirectory(root) == 0 or not follows(root) then
 					return
 				end
-				target = root
-				-- Neovim's cwd moves too, so pickers, grep and new files work in that project.
-				local old = vim.fn.getcwd()
-				if not same_path(old, target) then
-					vim.cmd.cd(vim.fn.fnameescape(target))
-					swap_editor_windows(old)
-				end
-				follow_in_current_tab()
+				go_to(root)
 			end)
 		)
 	end
@@ -392,6 +397,125 @@ vim.api.nvim_create_autocmd("TabEnter", {
 		vim.schedule(follow_in_current_tab)
 	end,
 })
+
+-- The other way round, from Neovim: <leader>gw picks one of the project's worktrees (its branch and
+-- the agent working there). Neovim moves right away and tells WezTerm (wezterm/agents.lua, "follow"),
+-- which records it as the followed worktree as if its agent was focused, so other Neovims of the
+-- project come along and focusing an agent moves them all again.
+
+-- The running agents by worktree (real path): the panes WezTerm lists in workspaces, each with the
+-- worktree from its state file (wezterm/bin/agent-status).
+local function agents_by_root()
+	local by_root = {}
+	local f = io.open(state_dir .. "/workspaces")
+	local ok, list = pcall(vim.json.decode, f and f:read("*a") or "")
+	if f then
+		f:close()
+	end
+	for _, w in ipairs(ok and type(list) == "table" and list or {}) do
+		for _, a in ipairs(type(w.agents) == "table" and w.agents or {}) do
+			local agent, state, root = (read_line(state_dir .. "/" .. a.pane) or ""):match("^([^\t]*)\t([^\t]*)\t([^\t]*)")
+			if root and root ~= "" then
+				by_root[vim.uv.fs_realpath(root) or root] = { pane = a.pane, agent = agent, state = state }
+			end
+		end
+	end
+	return by_root
+end
+
+local function switch_worktree(root)
+	go_to(root)
+	if vim.env.WEZTERM_PANE then
+		local agent = agents_by_root()[vim.uv.fs_realpath(root) or root]
+		local branch = vim.trim(vim.system({ "git", "-C", root, "branch", "--show-current" }, { text = true }):wait().stdout or "")
+		require("configs.workspaces").request("follow", root, agent and tostring(agent.pane) or "", branch)
+	end
+end
+
+vim.keymap.set("n", "<leader>gw", function()
+	local here = vim.fs.root(target or vim.fn.getcwd(), ".git")
+	local out = here and vim.system({ "git", "-C", here, "worktree", "list", "--porcelain" }, { text = true }):wait()
+	if not out or out.code ~= 0 then
+		return vim.notify("not in a git repository", vim.log.levels.WARN)
+	end
+	local list = {}
+	for line in vim.gsplit(out.stdout, "\n") do
+		local path = line:match("^worktree (.+)$")
+		if path then
+			table.insert(list, { root = path, branch = "" })
+		elseif list[#list] then
+			list[#list].branch = line:match("^branch refs/heads/(.+)$") or line == "detached" and "detached" or list[#list].branch
+		end
+	end
+	local agents = agents_by_root()
+	vim.ui.select(list, {
+		prompt = "worktree",
+		format_item = function(wt)
+			local agent = agents[vim.uv.fs_realpath(wt.root) or wt.root]
+			return ("%s %-24s %s%s"):format(
+				same_path(wt.root, here) and "●" or " ",
+				wt.branch,
+				vim.fn.fnamemodify(wt.root, ":~"),
+				agent and ("  " .. agent.agent .. " " .. agent.state) or ""
+			)
+		end,
+	}, function(wt)
+		if wt then
+			switch_worktree(wt.root)
+		end
+	end)
+end, { desc = "switch worktree" })
+
+-- <leader>gb previews a branch the way a GitHub or GitLab merge request shows it: its commits since
+-- it left the default branch (base...branch, from their merge base), nothing checked out. The
+-- default branch is the remote's, else the local main or master.
+local function default_branch(root)
+	local function git(...)
+		local out = vim.system({ "git", "-C", root, ... }, { text = true }):wait()
+		return out.code == 0 and vim.trim(out.stdout) or nil
+	end
+	local head = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if head then
+		return head
+	end
+	for _, ref in ipairs({ "origin/main", "origin/master", "main", "master" }) do
+		if git("rev-parse", "--verify", "--quiet", ref) then
+			return ref
+		end
+	end
+end
+
+vim.keymap.set("n", "<leader>gb", function()
+	local root = vim.fs.root(target or vim.fn.getcwd(), ".git")
+	local base = root and default_branch(root)
+	if not base then
+		return vim.notify(root and "no default branch found" or "not in a git repository", vim.log.levels.WARN)
+	end
+	local out = vim.system({
+		"git", "-C", root, "for-each-ref", "--sort=-committerdate",
+		"--format=%(refname:short)%09%(committerdate:relative)%09%(worktreepath)", "refs/heads",
+	}, { text = true }):wait()
+	local list = {}
+	for line in vim.gsplit(vim.trim(out.stdout or ""), "\n") do
+		local branch, age, worktree = line:match("^([^\t]+)\t([^\t]*)\t?(.*)$")
+		if branch and branch ~= base and "origin/" .. branch ~= base then
+			table.insert(list, { branch = branch, age = age, worktree = worktree })
+		end
+	end
+	if #list == 0 then
+		return vim.notify("no branches besides " .. base, vim.log.levels.INFO)
+	end
+	vim.ui.select(list, {
+		prompt = base .. "...",
+		format_item = function(b)
+			return ("%-32s %-16s %s"):format(b.branch, b.age, b.worktree ~= "" and vim.fn.fnamemodify(b.worktree, ":~") or "")
+		end,
+	}, function(b)
+		if b then
+			vim.cmd("CodeDiff --repo " .. vim.fn.fnameescape(root) .. " " .. base .. "..." .. b.branch)
+		end
+	end)
+end, { desc = "preview branch" })
 
 -- Leaving git views. Tabs showing the diff view or Neogit are marked in vim.t.git_view (above);
 -- every other tab is for editing.

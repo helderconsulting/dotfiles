@@ -98,6 +98,79 @@ function M.badge()
 	return mine[1], mine[2]
 end
 
+-- For the desktops (configs/desktops.lua) -----------------------------------------------------------
+
+function M.connected()
+	return status.BackendState == "Running"
+end
+
+local function ipv4(text)
+	local a, b, c, d = (text or ""):match("^(%d+)%.(%d+)%.(%d+)%.(%d+)$")
+	if a then
+		return ((tonumber(a) * 256 + tonumber(b)) * 256 + tonumber(c)) * 256 + tonumber(d)
+	end
+end
+
+local function within(ip, cidr)
+	local net, bits = cidr:match("^([%d.]+)/(%d+)$")
+	net, bits = ipv4(net), tonumber(bits)
+	if not (ip and net and bits) then
+		return false
+	end
+	local size = 2 ^ (32 - bits)
+	return math.floor(ip / size) == math.floor(net / size)
+end
+
+-- How a host is reached over the VPN, or nil when it isn't: a MagicDNS name, a tailnet address, or
+-- an address in a subnet a device routes (the route, like 10.10.1.0/24). Known from the last fetch,
+-- which lists the routes even while the VPN is stopped.
+function M.route(host)
+	host = (host or ""):gsub(":%d+$", "")
+	if host:match("%.ts%.net$") then
+		return "tailnet"
+	end
+	local ip = ipv4(host)
+	if not ip then
+		return nil
+	end
+	if within(ip, "100.64.0.0/10") then
+		return "tailnet"
+	end
+	for _, p in pairs(status.Peer or {}) do
+		for _, route in ipairs(p.PrimaryRoutes or {}) do
+			if within(ip, route) then
+				return route
+			end
+		end
+	end
+end
+
+-- Connect this Mac, then done(ok). A login it needs happens in the app, so that opens instead.
+function M.up(view, done)
+	local state = status.BackendState
+	if state == "NeedsLogin" or state == "NeedsMachineAuth" then
+		vim.system({ "open", "-a", "Tailscale" })
+		vim.notify("log in to tailscale first", vim.log.levels.WARN)
+		return done and done(false)
+	end
+	if pending then
+		return done and done(false)
+	end
+	pending = "connecting"
+	view.refresh()
+	view.run({ cli, "up" }, {
+		done = function(res)
+			pending = nil
+			if res.code == 0 then
+				status.BackendState = "Running"
+			end
+			if done then
+				done(res.code == 0)
+			end
+		end,
+	})
+end
+
 function M.show(e, mode)
 	if mode == "inspect" and not e.self then
 		return { "", " ping " .. e.name, "" }, { cli, "ping", "--c", "10", e.ips[1] or e.name }
@@ -139,24 +212,18 @@ M.actions = {
 		"<leader>s",
 		function(_, view)
 			local state = status.BackendState
-			local function toggle(word, cmd)
-				pending = word
+			if pending then
+				return
+			elseif state == "Running" or state == "Starting" then
+				pending = "disconnecting"
 				view.refresh()
-				view.run(cmd, {
+				view.run({ cli, "down" }, {
 					done = function()
 						pending = nil
 					end,
 				})
-			end
-			if pending then
-				return
-			elseif state == "Running" or state == "Starting" then
-				toggle("disconnecting", { cli, "down" })
-			elseif state == "NeedsLogin" or state == "NeedsMachineAuth" then
-				-- Logging in happens in the browser, which the app opens.
-				vim.system({ "open", "-a", "Tailscale" })
 			else
-				toggle("connecting", { cli, "up" })
+				M.up(view)
 			end
 		end,
 		"connect or disconnect this mac from the vpn",

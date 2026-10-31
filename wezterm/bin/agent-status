@@ -6,7 +6,8 @@
 #   state: working | waiting | idle | done | clear
 #
 # Hook JSON on stdin may carry the agent's cwd (Claude Code sends it, and it changes when the
-# agent moves into a worktree); without it the hook's own cwd is used.
+# agent moves into a worktree); without it the hook's own cwd is used. Its session id goes in the
+# file too, so the workspace pickers know which sessions are running.
 #
 # Nothing is written to the pane's terminal: an escape sequence written there can land in the
 # middle of the agent's own output and come out garbled.
@@ -29,8 +30,11 @@ while [ $# -gt 0 ]; do
 done
 
 cwd=
+session=
 if [ ! -t 0 ]; then
-	cwd=$(jq -r '.cwd // empty' 2>/dev/null)
+	input=$(cat)
+	cwd=$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null)
+	session=$(printf '%s' "$input" | jq -r '.session_id // empty' 2>/dev/null)
 fi
 [ -d "$cwd" ] || cwd=$PWD
 
@@ -45,8 +49,8 @@ if [ "$(git -C "$cwd" rev-parse --path-format=absolute --git-dir 2>/dev/null)" !
 	worktree=$(basename "$root")
 fi
 
-# agent <tab> state <tab> root <tab> branch <tab> worktree <tab> title, written whole so readers
-# never see half a file.
+# agent <tab> state <tab> root <tab> branch <tab> worktree <tab> title <tab> session, written whole
+# so readers never see half a file.
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status"
 file="$state_dir/$WEZTERM_PANE"
 # The turn ended (or the session did): a message it received has been answered (agent-message).
@@ -56,7 +60,7 @@ if [ "$state" = clear ]; then
 	rm -f "$file"
 else
 	mkdir -p "$state_dir"
-	printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$agent" "$state" "$root" "$branch" "$worktree" "$title" >"$file.$$"
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$agent" "$state" "$root" "$branch" "$worktree" "$title" "$session" >"$file.$$"
 	mv "$file.$$" "$file"
 fi
 

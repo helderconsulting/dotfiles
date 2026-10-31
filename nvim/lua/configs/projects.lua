@@ -75,7 +75,6 @@ vim.api.nvim_create_user_command("ProjectNew", function(opts)
 	open_project(path)
 end, { desc = "Create and open a new project", nargs = "?" })
 
-vim.keymap.set("n", "<leader>pp", ":Projects<cr>", { desc = "list projects" })
 vim.keymap.set("n", "<leader>pn", ":ProjectNew<cr>", { desc = "new project" })
 
 vim.api.nvim_create_autocmd("VimEnter", {

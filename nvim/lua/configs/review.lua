@@ -110,18 +110,33 @@ local function comment_at(buf, lnum)
 end
 
 -- Small floating editor that wraps and grows with its text, like a textarea.
--- <C-s> or <CR> in normal mode saves, <C-y> sends right away, q or <Esc> in normal mode cancels.
+-- <C-s> or <CR> in normal mode saves, <C-y> sends right away, q or <Esc> in normal mode cancels, and
+-- so does leaving it (a click elsewhere).
+-- It spans the window it opens from, its left edge on that window's number column, under the cursor
+-- line, or above it when the window has no room below; it never grows past that window.
 -- on_save(text, send_now)
 local function edit(title, initial, on_save)
+	local origin = vim.api.nvim_get_current_win()
+	local line = vim.fn.winline()
+	local origin_height = vim.api.nvim_win_get_height(origin)
+	-- The border takes a row above and below and the winbar one more, around at least 3 text lines.
+	local below = origin_height - line - 3
+	local above = line - 1 - 3
+	local up = below < 3 and above > below
+	local room = math.max(up and above or below, 1)
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.bo[buf].filetype = "markdown"
+	vim.bo[buf].bufhidden = "wipe"
 	vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(initial or "", "\n"))
 	local win = vim.api.nvim_open_win(buf, true, {
-		relative = "cursor",
-		row = 1,
+		relative = "win",
+		win = origin,
+		-- Under the cursor line, or with the bottom edge on the line above it.
+		anchor = up and "SW" or "NW",
+		row = up and line - 1 or line,
 		col = 0,
-		width = math.min(80, vim.o.columns - 4),
-		height = 4,
+		width = math.max(vim.api.nvim_win_get_width(origin) - 2, 10),
+		height = math.min(4, room),
 		-- Blank border in the popup's own color: padding on every side, with the file path in
 		-- the top edge and the key hints in the bottom edge.
 		border = { " ", " ", " ", " ", " ", " ", " ", " " },
@@ -140,11 +155,12 @@ local function edit(title, initial, on_save)
 	vim.wo[win].winbar = " "
 	vim.wo[win].winhighlight = "Normal:ReviewNoteLine,EndOfBuffer:ReviewNoteLine,SignColumn:ReviewNoteLine,"
 		.. "WinBar:ReviewNoteLine,FloatBorder:ReviewNoteLine"
-	-- Winbar line plus wrapped text, between 3 and 12 text lines.
+	-- Winbar line plus wrapped text, between 3 and 12 text lines, and no more than the window has room
+	-- for; past that it scrolls.
 	local function fit()
 		if vim.api.nvim_win_is_valid(win) then
 			local lines = vim.api.nvim_win_text_height(win, {}).all
-			vim.api.nvim_win_set_height(win, math.min(math.max(lines, 3), 12) + 1)
+			vim.api.nvim_win_set_height(win, math.max(math.min(math.max(lines, 3), 12, room - 1), 1) + 1)
 		end
 	end
 	fit()
@@ -153,6 +169,14 @@ local function edit(title, initial, on_save)
 		vim.cmd.stopinsert()
 		pcall(vim.api.nvim_win_close, win, true)
 	end
+	-- Leaving it, a click elsewhere included, cancels like q; the close waits until the move is done.
+	vim.api.nvim_create_autocmd("WinLeave", {
+		buffer = buf,
+		once = true,
+		callback = function()
+			vim.schedule(close)
+		end,
+	})
 	local function save(send_now)
 		local text = vim.trim(table.concat(vim.api.nvim_buf_get_lines(buf, 0, -1, false), "\n"))
 		close()

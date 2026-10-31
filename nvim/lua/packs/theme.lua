@@ -41,8 +41,9 @@ local highlights = {
 	ReviewNoteTitle = { fg = palette.purple, bg = "#120F18", bold = true },
 	ReviewNoteHint = { fg = "#505050", bg = "#120F18" },
 	InfoFloat = { bg = "#0C140C" },
-	-- Docker view (configs/docker.lua): tabs like the bar's entries, sections like CodeDiff's explorer,
-	-- container status in the agent states' colors.
+	-- Docker view (configs/docker.lua): tabs like the bar's entries, sections like fzf-lua's list
+	-- (packs/fzf.lua: fg+ on bg+, bold like fzf's current line), container status in the agent
+	-- states' colors.
 	DockerTab = { fg = palette.green },
 	DockerTabOff = { fg = palette.dim },
 	DockerTabCurrent = { fg = palette.bright, bg = "#162616", bold = true },
@@ -50,7 +51,7 @@ local highlights = {
 	DockerWordBusy = { fg = palette.purple },
 	DockerWordBad = { fg = palette.orange },
 	DockerMenu = { fg = palette.green },
-	DockerMenuSelected = { link = "CodeDiffExplorerSelected" },
+	DockerMenuSelected = { fg = palette.bright, bg = "#0F2A0F", bold = true },
 	-- Window separators match WezTerm's split lines and agent bar edges.
 	WinSeparator = { fg = "#223022" },
 }

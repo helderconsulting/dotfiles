@@ -132,7 +132,7 @@ M.actions = {
 	{
 		"<leader>d",
 		function(e, view)
-			if vim.fn.confirm("delete vm " .. e.name .. "?", "&yes\n&no", 2) == 1 then
+			if view.confirm("delete vm " .. e.name .. "?") then
 				view.run(cmd(e, { "delete", "--force" }, { "delete" }), { env = e.env })
 			end
 		end,
