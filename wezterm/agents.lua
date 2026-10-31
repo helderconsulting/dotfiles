@@ -126,8 +126,13 @@ end
 -- the docker_view user var. The tabs read like Neovim's buffers, the current one bright and the rest
 -- dim, and the label is the current one's status in its color, like an agent's state: green when a
 -- container runs or an image or volume is in use, purple while a container is getting there, orange
--- when it needs a look (or the engine is down), dim when it is stopped or unused.
-local docker_schemes = { ok = schemes.green, busy = schemes.purple, bad = schemes.orange, off = schemes.idle }
+-- when it needs a look (or the engine is down), grey when it is stopped or unused. Its vms and
+-- desktops sections read the same way: a running VM or connected desktop green, a failed one orange.
+-- The vpn devices section labels it with this Mac's VPN state on every tab instead: green connected,
+-- purple connecting, grey stopped, orange waiting on a login.
+-- Grey only here: the idle green reads too much like the running one next to it.
+local grey = { fg = "#8C8C8C", dim = "#555555", bg = "#121212", focus = "#1C1C1C" }
+local docker_schemes = { ok = schemes.green, busy = schemes.purple, bad = schemes.orange, off = grey }
 
 local function docker_info(pane)
 	local var = pane:get_user_vars().docker_view
@@ -144,7 +149,12 @@ local function docker_info(pane)
 		table.insert(parts, { text = tab.name or "", dim = not tab.current, tab = i })
 		current = tab.current and { index = i, word = tab.word, kind = tab.kind } or current
 	end
-	local label, scheme = current and current.word or "empty", current and docker_schemes[current.kind] or schemes.idle
+	-- An empty section is grey like a stopped entry: nothing there to run.
+	local label, scheme = current and current.word or "empty", current and docker_schemes[current.kind] or grey
+	-- A section with a state of its own (the VPN's) labels the entry with that on every tab.
+	if type(view.badge) == "table" then
+		label, scheme = view.badge.word or "", docker_schemes[view.badge.kind] or grey
+	end
 	if view.down then
 		label, scheme, parts = "down", schemes.orange, { { text = "docker engine" } }
 	elseif #parts == 0 then
@@ -566,6 +576,9 @@ function M.apply(config)
 				pane:split({ direction = "Left", size = 0.5, cwd = cwd, args = run("claude") })
 				app = pane:split({ direction = "Right", size = 0.5, cwd = cwd, args = run("nvim") })
 				focus = app
+				-- CloseCurrentPane closes the active pane, whatever pane it's given, and the split made
+				-- Neovim active.
+				pane:activate()
 				window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), pane)
 			elseif agent and editor and not containers then
 				app, focus = editor, pane

@@ -5,20 +5,26 @@
 -- status (a container's state, whether an image or volume is in use), and ALT left and right page
 -- through them. ALT up and down go through the sections; past the ends
 -- both move on to the next WezTerm pane like the rest of the ALT arrow grid (configs/keymaps.lua).
--- The actions sit under the leader, where which-key shows only them (packs/whichkey.lua).
+-- The actions sit under the leader, where which-key shows only the current section's (packs/whichkey.lua).
+-- Below the docker sections sit the lima VMs (configs/vms.lua), the remote desktops opened with
+-- FreeRDP (configs/desktops.lua) and the devices on the Tailscale VPN (configs/tailscale.lua).
 local M = {}
 
-local sections = { "containers", "images", "volumes" }
+local vms = require("configs.vms")
+local desktops = require("configs.desktops")
+local tailscale = require("configs.tailscale")
+
+local sections = { "containers", "images", "volumes", "vms", "desktops", "vpn devices" }
 
 local state = {
 	section = 1,
-	entries = { containers = {}, images = {}, volumes = {} },
+	entries = { containers = {}, images = {}, volumes = {}, vms = {}, desktops = {}, ["vpn devices"] = {} },
 	-- The id of the current tab per section, kept while the lists refresh.
 	current = {},
 	down = false,
 	-- The project folder when the containers are the project's, nil when they are all of them.
 	project = nil,
-	-- Content of the current tab: "logs" or "inspect" for containers.
+	-- Content of the current tab: "logs" or "inspect" for containers and VMs.
 	mode = "logs",
 }
 
@@ -44,8 +50,8 @@ local function container_status(st, status)
 			return "exited " .. code, "bad"
 		end
 		return "exited", "off"
-	elseif st == "restarting" then
-		return "restarting", "busy"
+	elseif st == "restarting" or st == "removing" then
+		return st, "busy"
 	elseif st == "dead" then
 		return "dead", "bad"
 	end
@@ -54,6 +60,7 @@ end
 
 local lists = {
 	containers = {
+		docker = true,
 		cmd = {
 			"docker",
 			"ps",
@@ -87,6 +94,7 @@ local lists = {
 		end,
 	},
 	images = {
+		docker = true,
 		cmd = { "docker", "image", "ls", "--format", "{{.ID}}\t{{.Repository}}\t{{.Tag}}\t{{.Size}}" },
 		parse = function(lines)
 			local list = {}
@@ -103,6 +111,7 @@ local lists = {
 		end,
 	},
 	volumes = {
+		docker = true,
 		cmd = { "docker", "volume", "ls", "--format", "{{.Name}}" },
 		parse = function(lines)
 			local list = {}
@@ -114,10 +123,18 @@ local lists = {
 			return list
 		end,
 	},
+	vms = vms,
+	desktops = desktops,
+	["vpn devices"] = tailscale,
 }
 
 local function section_name()
 	return sections[state.section]
+end
+
+-- The engine being down only matters to the docker sections.
+local function docker_down()
+	return state.down and lists[section_name()].docker == true
 end
 
 local function current_entry()
@@ -140,12 +157,22 @@ local function report()
 	for _, e in ipairs(state.entries[section_name()]) do
 		table.insert(tabs, { name = e.name, word = e.word, kind = e.kind, current = e.id == state.current[section_name()] })
 	end
-	local payload = vim.json.encode({
+	local info = {
 		section = section_name(),
-		project = state.project or "all",
-		down = state.down,
+		project = lists[section_name()].docker and (state.project or "all") or section_name(),
+		down = docker_down(),
 		tabs = tabs,
-	})
+	}
+	-- A section with a state of its own (the VPN's) labels the bar with it on every tab, and the
+	-- current entry's status goes where the project would.
+	local section = lists[section_name()]
+	if section.badge then
+		local word, kind = section.badge()
+		local entry = current_entry()
+		info.badge = { word = word, kind = kind }
+		info.project = entry and not entry.self and entry.word or ""
+	end
+	local payload = vim.json.encode(info)
 	if payload ~= last_report then
 		last_report = payload
 		vim.api.nvim_ui_send(("\27]1337;SetUserVar=docker_view=%s\7"):format(vim.base64.encode(payload)))
@@ -238,7 +265,8 @@ end
 
 local function show()
 	local name, entry = section_name(), current_entry()
-	local key = entry and (name .. ":" .. entry.id .. ":" .. state.mode) or (name .. (state.down and ":down" or ":none"))
+	local key = entry and (name .. ":" .. entry.id .. ":" .. state.mode)
+		or (name .. (docker_down() and ":down" or ":none"))
 	if key == shown then
 		return
 	end
@@ -249,10 +277,23 @@ local function show()
 	end
 	generation = generation + 1
 	set_content({})
-	if state.down then
+	if docker_down() then
 		set_content({ "", " the docker engine isn't running", " start it with: brew services start colima" })
+	elseif not entry and name == "desktops" then
+		set_content({
+			"",
+			" no desktops",
+			" add one with <leader>a, or export PCs from Windows App into",
+			" " .. vim.fn.fnamemodify(desktops.dir, ":~") .. " (<leader>o opens it)",
+		})
 	elseif not entry then
 		set_content({ "", " no " .. name })
+	elseif lists[name].show then
+		local lines, cmd = lists[name].show(entry, state.mode)
+		set_content(lines)
+		if cmd then
+			stream(cmd)
+		end
 	elseif name == "containers" and state.mode == "logs" then
 		stream({ "docker", "logs", "--tail", "500", "--follow", entry.id })
 	elseif name == "containers" then
@@ -264,55 +305,75 @@ local function show()
 	end
 end
 
+local set_actions
+
 local function redraw()
 	render_menu()
+	set_actions()
 	show()
 	report()
 end
 
 -- Refresh ----------------------------------------------------------------------------------------
 
+-- A name's sort key: case left out and numbers padded, so vmix 2 comes before vmix 10.
+local function natural(name)
+	return (name:lower():gsub("%d+", function(n)
+		return ("%012d"):format(tonumber(n))
+	end))
+end
+
 local function refresh()
 	local pending = #sections
 	local down = false
 	for _, name in ipairs(sections) do
-		vim.system(lists[name].cmd, { text = true }, function(res)
-			vim.schedule(function()
-				if res.code ~= 0 then
-					down = true
-					state.entries[name] = {}
-				else
-					local list = lists[name].parse(vim.split(res.stdout, "\n", { trimempty = true }))
-					table.sort(list, function(a, b)
-						return a.name < b.name
-					end)
-					state.entries[name] = list
-				end
-				-- Keep the current tab; fall back to the first when it is gone.
-				local keep = false
-				for _, e in ipairs(state.entries[name]) do
-					keep = keep or e.id == state.current[name]
-				end
-				if not keep then
-					state.current[name] = state.entries[name][1] and state.entries[name][1].id
-				end
-				pending = pending - 1
-				if pending == 0 then
-					state.down = down
-					-- Images and volumes are in use when a container has them (lists.containers).
-					for _, section in ipairs({ "images", "volumes" }) do
-						for _, e in ipairs(state.entries[section]) do
-							local used = false
-							for _, ref in ipairs(e.refs) do
-								used = used or (state.used or {})[ref] == true
-							end
-							e.word, e.kind = used and "in use" or "unused", used and "ok" or "off"
-						end
+		local function finish(list)
+			if not list then
+				down = true
+				state.entries[name] = {}
+			else
+				-- By name, after the entries a section puts first (tailscale's own Mac).
+				table.sort(list, function(a, b)
+					if (a.order or 1) ~= (b.order or 1) then
+						return (a.order or 1) < (b.order or 1)
 					end
-					redraw()
+					return natural(a.name) < natural(b.name)
+				end)
+				state.entries[name] = list
+			end
+			-- Keep the current tab; fall back to the first when it is gone.
+			local keep = false
+			for _, e in ipairs(state.entries[name]) do
+				keep = keep or e.id == state.current[name]
+			end
+			if not keep then
+				state.current[name] = state.entries[name][1] and state.entries[name][1].id
+			end
+			pending = pending - 1
+			if pending == 0 then
+				state.down = down
+				-- Images and volumes are in use when a container has them (lists.containers).
+				for _, section in ipairs({ "images", "volumes" }) do
+					for _, e in ipairs(state.entries[section]) do
+						local used = false
+						for _, ref in ipairs(e.refs) do
+							used = used or (state.used or {})[ref] == true
+						end
+						e.word, e.kind = used and "in use" or "unused", used and "ok" or "off"
+					end
 				end
+				redraw()
+			end
+		end
+		if lists[name].fetch then
+			lists[name].fetch(finish)
+		else
+			vim.system(lists[name].cmd, { text = true }, function(res)
+				vim.schedule(function()
+					finish(res.code == 0 and lists[name].parse(vim.split(res.stdout, "\n", { trimempty = true })) or nil)
+				end)
 			end)
-		end)
+		end
 	end
 end
 
@@ -351,78 +412,189 @@ end
 
 -- Actions ----------------------------------------------------------------------------------------
 
-local function run(cmd)
-	vim.system(cmd, { text = true }, function(res)
+-- What the sections' actions get to work with besides their entry.
+local view = {}
+
+-- Run cmd, show its error if it fails, and refresh the lists either way. opts.done runs first.
+function view.run(cmd, opts)
+	opts = opts or {}
+	vim.system(cmd, { text = true, env = opts.env }, function(res)
 		vim.schedule(function()
+			if opts.done then
+				opts.done(res)
+			end
 			if res.code ~= 0 then
-				vim.notify(vim.trim(res.stderr), vim.log.levels.ERROR)
+				vim.notify(vim.trim(res.stderr ~= "" and res.stderr or res.stdout), vim.log.levels.ERROR)
 			end
 			refresh()
 		end)
 	end)
 end
 
-local function container(fn)
-	return function()
-		local entry = current_entry()
-		if section_name() == "containers" and entry then
-			fn(entry)
+-- Run cmd in a WezTerm pane to the right of the view.
+function view.split(cmd)
+	vim.system(
+		vim.list_extend({ "wezterm", "cli", "split-pane", "--pane-id", vim.env.WEZTERM_PANE, "--right", "--" }, cmd)
+	)
+end
+
+function view.refresh()
+	refresh()
+end
+
+function view.toggle_mode()
+	state.mode = state.mode == "logs" and "inspect" or "logs"
+	redraw()
+end
+
+-- Make the entry with this id the current tab, once it shows up in the list.
+function view.select(id)
+	state.current[section_name()] = id
+	refresh()
+end
+
+local function remove(kind)
+	return {
+		"<leader>d",
+		function(e)
+			if vim.fn.confirm("remove " .. e.name .. "?", "&yes\n&no", 2) == 1 then
+				view.run({ "docker", kind, "rm", e.id })
+			end
+		end,
+		"remove " .. kind,
+	}
+end
+
+-- Each section's actions get its current entry and the view; the ones marked always also run on an
+-- empty section.
+local actions = {
+	containers = {
+		{
+			"<leader>s",
+			function(e)
+				view.run({ "docker", e.kind == "off" and "start" or "stop", e.id })
+			end,
+			"start or stop container",
+		},
+		{
+			"<leader>r",
+			function(e)
+				view.run({ "docker", "restart", e.id })
+			end,
+			"restart container",
+		},
+		{
+			"<leader>e",
+			function(e)
+				view.split({ "docker", "exec", "-it", e.id, "sh" })
+			end,
+			"shell in container",
+		},
+		{
+			"<leader>i",
+			function()
+				view.toggle_mode()
+			end,
+			"toggle logs and inspect",
+		},
+		remove("container"),
+	},
+	images = { remove("image") },
+	volumes = { remove("volume") },
+	vms = vms.actions,
+	desktops = desktops.actions,
+	["vpn devices"] = tailscale.actions,
+}
+
+-- Like <leader>- on the diff view: closes the whole view, and with it the pane, since WezTerm runs it
+-- without a shell to fall back to.
+local close = {
+	"<leader>-",
+	function()
+		vim.cmd("qa")
+	end,
+	"close docker view",
+	always = true,
+}
+
+-- Pick an entry of the current section with fzf-lua, filtering on its status, name, and host or
+-- address, colored like the bar's labels; the pick becomes the current tab.
+local kind_colors = { ok = "#77DD77", busy = "#A58BD3", bad = "#E0955A", off = "#8C8C8C", detail = "#3F6F3F" }
+
+local find = {
+	"<leader>f",
+	function()
+		local name = section_name()
+		local list = state.entries[name]
+		if #list == 0 then
+			return
+		end
+		require("packs.fzf")
+		local fzf = require("fzf-lua")
+		local utils = require("fzf-lua.utils")
+		local lines, by_line, width = {}, {}, 0
+		for _, e in ipairs(list) do
+			width = math.max(width, vim.fn.strdisplaywidth(e.name))
+		end
+		for _, e in ipairs(list) do
+			local detail = e.host or e.dns or ""
+			local line = ("%s  %s  %s"):format(
+				utils.ansi_from_rgb(kind_colors[e.kind] or kind_colors.off, ("%-12s"):format(e.word or "")),
+				e.name .. string.rep(" ", width - vim.fn.strdisplaywidth(e.name)),
+				utils.ansi_from_rgb(kind_colors.detail, detail)
+			)
+			table.insert(lines, line)
+			by_line[vim.trim(utils.strip_ansi_coloring(line))] = e.id
+		end
+		fzf.fzf_exec(lines, {
+			prompt = name .. "> ",
+			fzf_opts = { ["--ansi"] = true },
+			actions = {
+				["enter"] = function(selected)
+					local id = selected and selected[1] and by_line[vim.trim(utils.strip_ansi_coloring(selected[1]))]
+					if id and section_name() == name then
+						state.current[name] = id
+						state.mode = "logs"
+						redraw()
+					end
+				end,
+			},
+		})
+	end,
+	"find in this section",
+	always = true,
+}
+
+local mapped = { section = nil, lhs = {} }
+
+-- Map the current section's actions on the view's buffers, in place of the last section's, so
+-- which-key lists only what works here.
+function set_actions()
+	if mapped.section == section_name() then
+		return
+	end
+	for _, buf in ipairs({ main_buf, menu_buf }) do
+		if buf and vim.api.nvim_buf_is_valid(buf) then
+			for _, lhs in ipairs(mapped.lhs) do
+				pcall(vim.keymap.del, "n", lhs, { buffer = buf })
+			end
+		end
+	end
+	mapped = { section = section_name(), lhs = {} }
+	for _, a in ipairs(vim.list_extend(vim.list_slice(actions[section_name()]), { find, close })) do
+		table.insert(mapped.lhs, a[1])
+		for _, buf in ipairs({ main_buf, menu_buf }) do
+			if buf and vim.api.nvim_buf_is_valid(buf) then
+				vim.keymap.set("n", a[1], function()
+					local entry = current_entry()
+					if entry or a.always then
+						a[2](entry, view)
+					end
+				end, { buffer = buf, desc = a[3], nowait = true })
+			end
 		end
 	end
 end
-
-local actions = {
-	{
-		"<leader>s",
-		container(function(e)
-			run({ "docker", e.kind == "off" and "start" or "stop", e.id })
-		end),
-		"start or stop container",
-	},
-	{
-		"<leader>r",
-		container(function(e)
-			run({ "docker", "restart", e.id })
-		end),
-		"restart container",
-	},
-	{
-		"<leader>e",
-		container(function(e)
-			vim.system({ "wezterm", "cli", "split-pane", "--pane-id", vim.env.WEZTERM_PANE, "--right", "--", "docker", "exec", "-it", e.id, "sh" })
-		end),
-		"shell in container",
-	},
-	{
-		"<leader>i",
-		container(function()
-			state.mode = state.mode == "logs" and "inspect" or "logs"
-			redraw()
-		end),
-		"toggle logs and inspect",
-	},
-	{
-		"<leader>d",
-		function()
-			local entry = current_entry()
-			if not entry or vim.fn.confirm("remove " .. entry.name .. "?", "&yes\n&no", 2) ~= 1 then
-				return
-			end
-			local kind = ({ containers = "container", images = "image", volumes = "volume" })[section_name()]
-			run({ "docker", kind, "rm", entry.id })
-		end,
-		"remove",
-	},
-	-- Like <leader>- on the diff view: closes the whole view, and with it the pane, since WezTerm
-	-- runs it without a shell to fall back to.
-	{
-		"<leader>-",
-		function()
-			vim.cmd("qa")
-		end,
-		"close docker view",
-	},
-}
 
 local function keymaps(buf)
 	local function map(lhs, fn, desc)
@@ -440,9 +612,6 @@ local function keymaps(buf)
 	map("<M-Down>", function()
 		step_section(1, "Down")
 	end, "next section")
-	for _, a in ipairs(actions) do
-		map(a[1], a[2], a[3])
-	end
 	-- Oil's - (packs/oil.lua) has no folder to open here.
 	map("-", "<nop>")
 end
