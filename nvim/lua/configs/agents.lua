@@ -1,5 +1,6 @@
--- The docker view's agents section (configs/docker.lua): the Claude sessions running in WezTerm
--- first, with their state, then the most recent earlier ones from ~/.claude/projects. A running one
+-- The sidebar's agents section (configs/sidebar.lua): the Claude sessions running in WezTerm
+-- first, with their state, then the most recent earlier ones from ~/.claude/projects. With a folder
+-- (the sidebar's workspace) only the sessions in it or below it (its worktrees) count. A running one
 -- switches to its pane; an earlier one opens a workspace in its folder that resumes it (both through
 -- WezTerm, configs/workspaces.lua). Earlier sessions can be renamed (a custom-title line, like
 -- /rename) and deleted.
@@ -33,11 +34,18 @@ local function parse(text, mtime)
 	return info
 end
 
+local function inside(folder, path)
+	return not folder or path == folder or (path or ""):sub(1, #folder + 1) == folder .. "/"
+end
+
 -- The newest session files, with the ones that changed read again (one grep each, C locale: they run
--- to megabytes).
-local function recent(done)
+-- to megabytes). For a folder only its own project directories: Claude names them after the folder
+-- with everything but letters and digits as dashes, so its worktrees' start the same way (a
+-- neighbour like ceuz-other does too, which the folder check in fetch leaves out).
+local function recent(done, folder)
 	local files = {}
-	for _, path in ipairs(vim.fn.glob(projects .. "/*/*.jsonl", false, true)) do
+	local dirs = folder and (folder:gsub("[^%w]", "-") .. "*") or "*"
+	for _, path in ipairs(vim.fn.glob(projects .. "/" .. dirs .. "/*.jsonl", false, true)) do
 		local st = vim.uv.fs_stat(path)
 		if st then
 			table.insert(files, { path = path, mtime = st.mtime.sec })
@@ -76,11 +84,12 @@ local function recent(done)
 	end
 end
 
-function M.fetch(done)
+function M.fetch(done, opts)
+	local folder = opts and opts.folder
 	recent(function(files)
 		local list, live = {}, {}
 		for _, w in ipairs(workspaces.running()) do
-			for _, a in ipairs(w.agents or {}) do
+			for _, a in ipairs(inside(folder, w.root) and w.agents or {}) do
 				local id = a.session ~= "" and a.session or ("pane " .. a.pane)
 				live[id] = true
 				table.insert(list, {
@@ -101,7 +110,7 @@ function M.fetch(done)
 		for i, f in ipairs(files) do
 			local info = cache[f.path]
 			local id = vim.fn.fnamemodify(f.path, ":t:r")
-			if info and info.title and not live[id] then
+			if info and info.title and not live[id] and (not folder or (info.cwd and inside(folder, info.cwd))) then
 				table.insert(list, {
 					id = id,
 					session = id,
@@ -130,41 +139,17 @@ function M.fetch(done)
 			end
 		end
 		done(list)
-	end)
+	end, folder)
 end
 
-function M.show(e)
-	local lines = { "" }
-	local function row(label, value)
-		if value and value ~= "" then
-			table.insert(lines, (" %-12s %s"):format(label, value))
-		end
-	end
-	row("session", e.name)
-	row("state", e.pane and (e.agent .. " " .. e.state .. ", running in wezterm") or "not running")
-	row("folder", e.cwd and vim.fn.fnamemodify(e.cwd, ":~"))
-	row("last active", e.mtime and (os.date("%Y-%m-%d %H:%M", e.mtime) .. "  (" .. workspaces.age(e.mtime) .. " ago)"))
-	row("id", e.session)
-	if e.prompt then
-		vim.list_extend(lines, { "", " last prompt", "" })
-		for _, line in ipairs(vim.split(e.prompt, "\n")) do
-			table.insert(lines, " " .. line)
-		end
-	end
-	if e.cwd and not e.pane and vim.fn.isdirectory(e.cwd) == 0 then
-		vim.list_extend(lines, { "", " its folder is gone, so it can't be resumed from here" })
-	end
-	table.insert(lines, "")
-	return lines
-end
 
--- Go to a running agent, or resume the session in a workspace in its folder; also enter in the find
--- picker (configs/docker.lua).
 function M.enter(e)
 	if e.pane then
 		workspaces.request("pane", e.pane)
 	elseif e.cwd and vim.fn.isdirectory(e.cwd) == 1 then
-		workspaces.request("open", "session:" .. e.session, e.cwd)
+		workspaces.request("open", "session:" .. e.session, e.cwd, "here")
+	else
+		vim.notify("can't resume " .. e.name .. ": " .. (e.cwd and "its folder is gone" or "its session names no folder"), vim.log.levels.WARN)
 	end
 end
 
@@ -210,9 +195,7 @@ M.actions = {
 		"<leader>s",
 		function(e, view)
 			if not e.pane then
-				if e.cwd and vim.fn.isdirectory(e.cwd) == 1 then
-					workspaces.request("open", "session:" .. e.session, e.cwd)
-				end
+				M.enter(e)
 			elseif view.confirm("stop " .. e.name .. "? it stays resumable") then
 				view.run({ "wezterm", "cli", "kill-pane", "--pane-id", tostring(e.pane) })
 			end

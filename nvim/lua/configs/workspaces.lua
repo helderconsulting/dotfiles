@@ -1,4 +1,4 @@
--- The docker view's workspaces section (configs/docker.lua): the projects in ~/Code, like :Projects,
+-- The sidebar's workspaces section (configs/sidebar.lua): the projects in ~/Code, like :Projects,
 -- plus any other folder a workspace runs in. A workspace is a WezTerm tab holding a project's agents
 -- and Neovim (CTRL|ALT w, wezterm/agents.lua); WezTerm lists the running ones in the agent state
 -- folder, and a project with one reads as its most pressing agent's state. The actions switch to it,
@@ -110,37 +110,6 @@ function M.fetch(done)
 	end)
 end
 
-function M.show(e)
-	local lines = { "" }
-	local function row(label, value)
-		table.insert(lines, (" %-10s %s"):format(label, value))
-	end
-	row("folder", vim.fn.fnamemodify(e.dir, ":~"))
-	if #e.workspaces == 0 then
-		vim.list_extend(lines, {
-			"",
-			" not open: <leader>s opens it with a new claude session, <leader>o asks how",
-		})
-	end
-	for i, w in ipairs(e.workspaces) do
-		table.insert(lines, "")
-		row(#e.workspaces > 1 and ("workspace " .. i) or "workspace", vim.list_contains(w.panes or {}, tonumber(vim.env.WEZTERM_PANE or "")) and "this one" or "running")
-		if w.root ~= e.dir then
-			row("in", vim.fn.fnamemodify(w.root, ":~"))
-		end
-		for _, a in ipairs(w.agents or {}) do
-			row(a.agent, a.state .. "  " .. (a.title or ""))
-		end
-		if w.editor then
-			row("nvim", "open")
-		end
-		if w.docker then
-			row("docker", "open")
-		end
-	end
-	table.insert(lines, "")
-	return lines
-end
 
 -- The workspace to act on: the first running one (the one this view is in, when it is).
 local function first(e)
@@ -167,7 +136,7 @@ local function choose(e)
 	end)
 end
 
--- Enter in the find picker (configs/docker.lua): go there, or start it with a new claude session.
+-- Enter in the sidebar: go there, or start it with a new claude session.
 function M.enter(e)
 	local w = first(e)
 	if w then

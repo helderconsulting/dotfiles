@@ -121,15 +121,47 @@ local function shell_info(pane)
 	}
 end
 
--- The docker view under Neovim (CTRL|ALT w, nvim/lua/configs/docker.lua) reports its section's
--- entries as tabs and the project its containers come from ("all" when it shows every container) in
--- the docker_view user var. The tabs read like Neovim's buffers, the current one bright and the rest
--- dim, and the label is the current one's status in its color, like an agent's state: green when a
--- container runs or an image or volume is in use, purple while a container is getting there, orange
--- when it needs a look (or the engine is down), grey when it is stopped or unused. Its vms and
--- desktops sections read the same way: a running VM or connected desktop green, a failed one orange.
--- The vpn devices section labels it with this Mac's VPN state on every tab instead: green connected,
--- purple connecting, grey stopped, orange waiting on a login.
+-- The sidebar on the left of a workspace (nvim/lua/configs/sidebar.lua) reports its sections in the
+-- sidebar user var, which also marks it as no editor of the workspace. Its entry shows them as tabs
+-- over the one panel, each with its count (push_tabs).
+local function is_sidebar(pane)
+	local var = pane:get_user_vars().sidebar
+	return var ~= nil and var ~= "" and foreground_process(pane):find("n?vim$") ~= nil
+end
+
+local function sidebar_info(pane)
+	if not is_sidebar(pane) then
+		return nil
+	end
+	local ok, view = pcall(wezterm.serde.json_decode, pane:get_user_vars().sidebar)
+	view = ok and type(view) == "table" and view or {}
+	local tabs = {}
+	for _, tab in ipairs(view.tabs or {}) do
+		table.insert(tabs, {
+			name = tab.name or "",
+			info = tostring(tonumber(tab.count) or 0),
+			scheme = schemes.green,
+			current = tab.current == true,
+		})
+	end
+	return {
+		sidebar = true,
+		badge = { label = "", scheme = schemes.green },
+		tabs = tabs,
+		split = true,
+		parts = {},
+		worktree = "",
+		branch = "",
+	}
+end
+
+-- The docker view under Neovim (CTRL|ALT w, nvim/lua/configs/docker.lua) reports its tabs and the
+-- project its containers come from in the docker_view user var: one tab, its section with the
+-- count, over the view's lists (its entries are cards in the pane). The tabs are push_tabs', each
+-- with its word in its kind's color, like an agent's state: green ok, purple getting there, orange
+-- needs a look, grey stopped or unused. The vpn devices section leads with this Mac's VPN state:
+-- green connected, purple connecting, grey stopped, orange waiting on a login. A down engine is one
+-- tab saying so.
 -- Grey only here: the idle green reads too much like the running one next to it.
 local grey = { fg = "#8C8C8C", dim = "#555555", bg = "#121212", focus = "#1C1C1C" }
 local docker_schemes = { ok = schemes.green, busy = schemes.purple, bad = schemes.orange, off = grey }
@@ -141,33 +173,32 @@ local function docker_info(pane)
 	end
 	local ok, view = pcall(wezterm.serde.json_decode, var)
 	view = ok and type(view) == "table" and view or {}
-	local parts, current = {}, nil
-	for i, tab in ipairs(view.tabs or {}) do
-		if i > 1 then
-			table.insert(parts, { text = "   ", tab = i, gap = true })
-		end
-		table.insert(parts, { text = tab.name or "", dim = not tab.current, tab = i })
-		current = tab.current and { index = i, word = tab.word, kind = tab.kind } or current
-	end
-	-- An empty section is grey like a stopped entry: nothing there to run.
-	local label, scheme = current and current.word or "empty", current and docker_schemes[current.kind] or grey
-	-- A section with a state of its own (the VPN's) labels the entry with that on every tab.
-	if type(view.badge) == "table" then
-		label, scheme = view.badge.word or "", docker_schemes[view.badge.kind] or grey
+	local tabs = {}
+	for _, tab in ipairs(view.tabs or {}) do
+		table.insert(tabs, {
+			name = tab.name or "",
+			info = tab.word or "",
+			scheme = docker_schemes[tab.kind] or grey,
+			current = tab.current == true,
+		})
 	end
 	if view.down then
-		label, scheme, parts = "down", schemes.orange, { { text = "docker engine" } }
-	elseif #parts == 0 then
-		parts = { { text = "no " .. (view.section or "containers") } }
+		tabs = { { name = "docker engine", info = "down", scheme = schemes.orange, current = true } }
+	elseif #tabs == 0 then
+		tabs = { { name = "no " .. (view.section or "containers"), info = "", scheme = grey, current = true } }
 	end
+	local lead = type(view.badge) == "table"
+		and { text = view.badge.word or "", scheme = docker_schemes[view.badge.kind] or grey }
 	return {
 		docker = true,
 		-- The view's menu width plus its split line, so the entry sits right under the menu. Not
 		-- width: bar_entries sets that to the pane's.
 		menu_width = tonumber(view.width),
-		badge = { label = label or "", scheme = scheme },
-		parts = parts,
-		current_tab = current and current.index,
+		badge = { label = "", scheme = grey },
+		tabs = tabs,
+		split = true,
+		lead = lead or nil,
+		parts = {},
 		worktree = view.project or "",
 		branch = "",
 	}
@@ -341,6 +372,110 @@ local function push_entry(items, b, e, focused, width, number)
 	seg(bg, bg, "  ")
 end
 
+local function push_tabs(items, e, focused, width, number)
+	local function seg(fg, seg_bg, text)
+		table.insert(items, { Foreground = { Color = fg } })
+		table.insert(items, { Background = { Color = seg_bg } })
+		table.insert(items, { Text = text })
+	end
+	local cw = wezterm.column_width
+	local num = number and (number .. "  ") or ""
+	local left = width or math.huge
+
+	if e.lead then
+		local c = e.lead.scheme
+		local bg = focused and c.focus or c.bg
+		local text = wezterm.truncate_right(num .. e.lead.text .. "  ", math.max(left - 2, 0))
+		seg(focused and c.fg or c.dim, bg, "▎ ")
+		table.insert(items, { Attribute = { Intensity = "Bold" } })
+		seg(c.fg, bg, text)
+		table.insert(items, "ResetAttributes")
+		left, num = left - 2 - cw(text), ""
+	end
+
+	local tabs, current = e.tabs, 1
+	for i, t in ipairs(tabs) do
+		current = t.current and i or current
+	end
+	local function natural(i)
+		local t = tabs[i]
+		return 2 + cw(t.name) + (t.info ~= "" and cw(" " .. t.info) or 0) + 2
+	end
+	local first, last = 1, #tabs
+	local widths = {}
+	if e.split and width then
+		local avail = left - cw(num)
+		local share = math.floor(avail / #tabs)
+		for i = 1, #tabs do
+			widths[i] = i < #tabs and share or avail - share * (#tabs - 1)
+		end
+		widths[1] = widths[1] + cw(num)
+	else
+		for i = 1, #tabs do
+			widths[i] = natural(i)
+		end
+		if width then
+			local function used(from, to)
+				local w = cw(num) + (from > 1 and 4 or 0) + (to < #tabs and 4 or 0)
+				for i = from, to do
+					w = w + widths[i]
+				end
+				return w
+			end
+			while first < current and used(first, current) > left do
+				first = first + 1
+			end
+			last = current
+			while last < #tabs and used(first, last + 1) <= left do
+				last = last + 1
+			end
+		end
+	end
+
+	local c0 = tabs[1] and tabs[1].scheme or schemes.green
+	local function marker(text)
+		local t = wezterm.truncate_right(text, math.max(left, 0))
+		seg(c0.dim, palette.bar, t)
+		left = left - cw(t)
+	end
+	if first > 1 then
+		marker(num .. "‹" .. (first - 1) .. "  ")
+		num = ""
+	end
+	for i = first, last do
+		if left <= 0 then
+			break
+		end
+		local t = tabs[i]
+		local c = t.scheme
+		local bg = t.current and (focused and c.focus or c.bg) or palette.bar
+		local w = math.min(widths[i] + (i == first and not e.split and cw(num) or 0), left)
+		local edge = t.current and "▎ " or "  "
+		local info = t.info ~= "" and (" " .. t.info) or ""
+		local name_room = math.max(w - cw(edge) - cw(num) - cw(info) - 2, 0)
+		local name = wezterm.truncate_right(t.name, name_room)
+		local pad = math.max(w - cw(edge) - cw(num) - cw(name) - cw(info), 0)
+		seg(focused and c.fg or c.dim, bg, edge)
+		seg(c.dim, bg, num)
+		if t.current then
+			table.insert(items, { Attribute = { Intensity = "Bold" } })
+		end
+		seg(t.current and c.fg or c.dim, bg, name)
+		table.insert(items, "ResetAttributes")
+		seg(bg, bg, string.rep(" ", math.max(pad - 2, 0)))
+		seg(t.current and c.fg or c.dim, bg, info)
+		seg(bg, bg, string.rep(" ", math.min(pad, 2)))
+		left = left - w
+		num = ""
+	end
+	if last < #tabs and left > 0 then
+		marker("  " .. (#tabs - last) .. "›  ")
+	end
+	if width and left > 0 then
+		seg(palette.bar, palette.bar, string.rep(" ", left))
+	end
+end
+
 local function filler(items, width)
 	table.insert(items, { Background = { Color = palette.bar } })
 	table.insert(items, { Text = string.rep(" ", width) })
@@ -352,8 +487,13 @@ local function bar_entries(window)
 	local active_tab = window:active_tab()
 	for _, tab in ipairs(window:mux_window():tabs()) do
 		for _, p in ipairs(tab:panes_with_info()) do
-			local info = agent_info(p.pane) or docker_info(p.pane) or editor_info(p.pane) or shell_info(p.pane)
-			if info then
+			local info = sidebar_info(p.pane)
+				or agent_info(p.pane)
+				or docker_info(p.pane)
+				or editor_info(p.pane)
+				or shell_info(p.pane)
+			-- Every workspace has its own sidebar; only the one on screen gets an entry.
+			if info and not (info.sidebar and tab:tab_id() ~= active_tab:tab_id()) then
 				info.pane = p.pane
 				info.active_tab = tab:tab_id() == active_tab:tab_id()
 				info.focused = p.is_active and info.active_tab
@@ -393,12 +533,20 @@ local function bar_items(window, entries)
 	local function entry(e, width)
 		local b = e.badge or e.mode and mode_badge(e.mode) or badge(e.state, e.pane:pane_id(), e.focused)
 		table.insert(order, e.pane:pane_id())
-		push_entry(items, b, e, e.focused, width, #order <= 9 and #order or nil)
+		if e.tabs then
+			push_tabs(items, e, e.focused, width, #order <= 9 and #order or nil)
+		else
+			push_entry(items, b, e, e.focused, width, #order <= 9 and #order or nil)
+		end
 	end
 	-- Cells an entry takes at natural width (numbered, unfocused).
 	local function natural_width(e)
 		local scratch, w = {}, 0
-		push_entry(scratch, e.badge, e, false, nil, 1)
+		if e.tabs then
+			push_tabs(scratch, e, false, nil, 1)
+		else
+			push_entry(scratch, e.badge, e, false, nil, 1)
+		end
 		for _, item in ipairs(scratch) do
 			if type(item) == "table" and item.Text then
 				w = w + wezterm.column_width(item.Text)
@@ -467,13 +615,16 @@ local function cwd_of(p)
 	return url and url.file_path:gsub("/$", "") or nil
 end
 
--- What a tab holds: its agents (with their state), Neovim, the docker view, or a lone idle shell.
+-- What a tab holds: its agents (with their state), Neovim, the docker view, the sidebar, or a lone
+-- idle shell.
 local function tab_parts(tab)
 	local t = { panes = tab:panes(), agents = {} }
 	for _, p in ipairs(t.panes) do
 		local a = agent_info(p)
 		if a then
 			table.insert(t.agents, { pane = p, info = a })
+		elseif is_sidebar(p) then
+			t.sidebar = p
 		elseif docker_info(p) then
 			t.containers = t.containers or p
 		elseif editor_info(p) then
@@ -698,6 +849,34 @@ function M.apply(config)
 	-- here and joins it, under the agents already there. Anything else gets a new tab. Neovim starts
 	-- from cwd, so it belongs to the project and the agents attach to it (nvim/lua/packs/git.lua).
 	local cli = wezterm.executable_dir .. "/wezterm"
+
+	-- The sidebar (nvim/lua/configs/sidebar.lua) on the left of a workspace, about sidebar_px wide. It
+	-- splits off the leftmost pane that runs the full height (the agent, or Neovim without the docker
+	-- view under it), so it runs the full height too; not a top_level split, which leaves WezTerm's
+	-- layout a column off. A tab without such a pane, or too narrow to share, goes without.
+	local sidebar_px = 480
+	local function ensure_sidebar(tab, cwd)
+		local panes, rows = tab:panes_with_info(), 0
+		for _, p in ipairs(panes) do
+			if is_sidebar(p.pane) then
+				return
+			end
+			rows = math.max(rows, p.top + p.height)
+		end
+		for _, p in ipairs(panes) do
+			if p.left == 0 and p.top == 0 and p.height == rows then
+				local dims = p.pane:get_dimensions()
+				-- A cell's width in points: WezTerm's pixels are device pixels (dpi 144 is 2x).
+				local cell = dims.pixel_width / dims.cols / (dims.dpi / 72)
+				local cols = math.floor(sidebar_px / cell + 0.5)
+				if cols < p.width - 20 then
+					p.pane:split({ direction = "Left", size = cols, cwd = cwd, args = run("nvim +Sidebar", cwd, false) })
+				end
+				return
+			end
+		end
+	end
+
 	local function open(window, pane, cwd, mode, here)
 		local t = tab_parts(window:active_tab())
 		local agent = agent_command(mode)
@@ -742,8 +921,9 @@ function M.apply(config)
 		-- Neovim. No shell after it: closing the view (<leader>-) closes the pane.
 		if mode ~= "nvim" and not containers then
 			app:split({ direction = "Bottom", size = 0.35, cwd = cwd, args = run("nvim +Docker", cwd, false) })
-			focus:activate()
 		end
+		ensure_sidebar(focus:tab(), cwd)
+		focus:activate()
 	end
 
 	-- Bring a workspace's tab and window forward.
@@ -930,11 +1110,12 @@ function M.apply(config)
 		end
 	end
 
-	-- Reloads a workspace: every Neovim in it (the editor and the docker view) runs :restart, which
+	-- Reloads a workspace: every Neovim in it (the editor, the docker view, the sidebar) runs :restart, which
 	-- starts it again with the same arguments, so config changes take effect; the agents keep
 	-- running. A Neovim with unsaved changes refuses (:restart quits with :qall), so it is shown.
 	local function reload_workspace(mw, tab)
-		for _, p in ipairs(tab_parts(tab).panes) do
+		local t = tab_parts(tab)
+		for _, p in ipairs(t.panes) do
 			if editor_info(p) then
 				if unsaved(p) then
 					switch(mw, tab)
@@ -942,6 +1123,10 @@ function M.apply(config)
 				end
 				p:send_text("\x1b:restart\r")
 			end
+		end
+		-- A workspace from before the sidebar gets one.
+		if (t.agent or t.editor) and t.root ~= "" then
+			ensure_sidebar(tab, t.root)
 		end
 	end
 
@@ -1000,7 +1185,7 @@ function M.apply(config)
 				target:activate()
 			end
 		elseif kind == "open" and args[3] and args[3] ~= "" then
-			open(window, pane, args[3], args[2], false)
+			open(window, pane, args[3], args[2], args[4] == "here")
 		elseif kind == "follow" and args[2] and args[2] ~= "" then
 			write_focus(args[2] .. "\t" .. (args[3] or "") .. "\t" .. (args[4] or ""))
 		end

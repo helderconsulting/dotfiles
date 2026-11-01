@@ -241,8 +241,9 @@ end
 -- Which Neovims follow. Each one belongs to the project it was opened in (by git common dir, so a
 -- repo's worktrees are one project) and registers it in nvim-<pane>. An agent attaches to the
 -- Neovims of its own project; an agent in a project without one moves only the Neovim used last
--- (the editor file, written on focus), which with a single Neovim is always that one.
-local self_pane = vim.env.WEZTERM_PANE
+-- (the editor file, written on focus), which with a single Neovim is always that one. The sidebar
+-- (configs/sidebar.lua, started before this loads) is no editor and stays out of it.
+local self_pane = not vim.g.sidebar and vim.env.WEZTERM_PANE or nil
 local self_file = self_pane and (state_dir .. "/nvim-" .. self_pane)
 local common_dirs = {}
 

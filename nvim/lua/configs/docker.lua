@@ -1,25 +1,24 @@
 -- Docker view for the pane under Neovim that CTRL|ALT w opens (wezterm/agents.lua runs nvim +Docker),
--- in its own Neovim. Laid out like the CodeDiff view: the sections (containers, images, volumes) on
--- the right, the current entry's logs or details on the left. The section's entries are tabs that
--- act like buffers: the WezTerm bar shows them in this pane's entry, labeled with the current one's
--- status (a container's state, whether an image or volume is in use), and ALT left and right page
--- through them. ALT up and down go through the sections; past the ends
--- both move on to the next WezTerm pane like the rest of the ALT arrow grid (configs/keymaps.lua).
--- A count moves that many like 5j does (5 ALT down), stopping at the end instead. gg and G go to the
--- first and last entry, 12G to the twelfth.
+-- in its own Neovim. Laid out like Finder's column view, kept on the right like CodeDiff's explorer:
+-- the sections (containers, images, volumes, ...) with their counts, next to them the current
+-- section's entries as cards with their status (a container's state, whether an image or volume is
+-- in use), both as cards (configs/cards.lua), and the current entry's logs or details left of them. The
+-- WezTerm bar shows the section, the current entry and its status as this pane's one tab. Up and down
+-- (j, k) move through the focused column, left and right (h, l) to the column there; gg, G and
+-- counts work like on lines. ALT arrows move between the windows and panes like everywhere else
+-- (configs/keymaps.lua).
 -- The actions sit under the leader, where which-key shows only the current section's (packs/whichkey.lua).
 -- Every section uses the same keys for the same kind of action, done to whatever its entry is:
---   s  start or stop (a container, script or VM, a desktop or the VPN connection, a workspace, an agent)
---   r  restart       o  open or go to (in the browser, the workspace, the agent)
+--   s  start or stop (a container, script or VM, a desktop or the VPN connection)
+--   r  restart       o  open (in the browser)
 --   e  shell into it i  toggle details and inspect
 --   y  copy          d  delete or remove
 --   a  add           n  rename            f  find in this section      -  close the view
 -- plus the few a section has to itself (a desktop's c settings and p password, the VPN's x exit node).
 -- Below the docker sections sit the project's package.json scripts (configs/scripts.lua), the lima
 -- VMs (configs/vms.lua), the remote desktops opened with FreeRDP (configs/desktops.lua), the devices
--- on the Tailscale VPN (configs/tailscale.lua) and the ports this Mac listens on (configs/ports.lua),
--- then the projects' WezTerm workspaces (configs/workspaces.lua) and the Claude sessions, running and
--- earlier (configs/agents.lua).
+-- on the Tailscale VPN (configs/tailscale.lua) and the ports this Mac listens on (configs/ports.lua).
+-- The workspaces and agents have the sidebar (configs/sidebar.lua).
 local M = {}
 
 local vms = require("configs.vms")
@@ -27,10 +26,9 @@ local desktops = require("configs.desktops")
 local tailscale = require("configs.tailscale")
 local ports = require("configs.ports")
 local scripts = require("configs.scripts")
-local workspaces = require("configs.workspaces")
-local agents = require("configs.agents")
+local cards = require("configs.cards")
 
-local sections = { "containers", "images", "volumes", "scripts", "vms", "desktops", "vpn devices", "ports", "workspaces", "agents" }
+local sections = { "containers", "images", "volumes", "scripts", "vms", "desktops", "vpn devices", "ports" }
 
 local state = {
 	section = 1,
@@ -43,8 +41,6 @@ local state = {
 		["vpn devices"] = {},
 		ports = {},
 		scripts = {},
-		workspaces = {},
-		agents = {},
 	},
 	-- The id of the current tab per section, kept while the lists refresh.
 	current = {},
@@ -55,10 +51,10 @@ local state = {
 	mode = "logs",
 }
 
-local main_win, main_buf, menu_win, menu_buf
+local main_win, main_buf, menu_win, menu_buf, items_win, items_buf
 
--- The menu is as wide as CodeDiff's explorer (packs/git.lua), so the two side panels line up, and
--- the view's entry in the WezTerm bar takes the same width plus the split line (report).
+-- Each list is as wide as CodeDiff's explorer (packs/git.lua), so the side panels line up, and the
+-- view's entry in the WezTerm bar takes both plus their split lines (report).
 local function menu_width()
 	local ok, config = pcall(require, "codediff.config")
 	local width = ok and config.options and config.options.explorer and config.options.explorer.width
@@ -172,8 +168,6 @@ local lists = {
 	["vpn devices"] = tailscale,
 	ports = ports,
 	scripts = scripts,
-	workspaces = workspaces,
-	agents = agents,
 }
 
 local function section_name()
@@ -201,16 +195,21 @@ local function report()
 	if not vim.env.WEZTERM_PANE then
 		return
 	end
-	local tabs = {}
-	for _, e in ipairs(state.entries[section_name()]) do
-		table.insert(tabs, { name = e.name, word = e.word, kind = e.kind, current = e.id == state.current[section_name()] })
-	end
+	local entry = current_entry()
+	local tabs = {
+		{
+			name = section_name() .. (entry and ("  " .. entry.name) or ""),
+			word = entry and entry.word or "empty",
+			kind = entry and entry.kind or "off",
+			current = true,
+		},
+	}
 	local info = {
 		section = section_name(),
 		project = lists[section_name()].docker and (state.project or "all") or section_name(),
 		down = docker_down(),
 		tabs = tabs,
-		width = menu_width() + 1,
+		width = 2 * (menu_width() + 1),
 	}
 	-- A section with a state of its own (the VPN's) labels the bar with it on every tab, and the
 	-- current entry's status goes where the project would.
@@ -232,38 +231,85 @@ local function report()
 	end
 end
 
--- Section menu ------------------------------------------------------------------------------------
+-- Lists ------------------------------------------------------------------------------------------
+
+local kind_rank = { bad = 4, busy = 3, ok = 2, off = 1 }
+
+local function section_kind(name)
+	local kind
+	for _, e in ipairs(state.entries[name]) do
+		if (kind_rank[e.kind] or 0) > (kind_rank[kind] or 0) then
+			kind = e.kind
+		end
+	end
+	return kind or "off"
+end
+
+local function section_detail(name)
+	local section = lists[name]
+	if section.badge then
+		return (section.badge())
+	elseif section.place then
+		return section.place()
+	elseif section.docker then
+		return state.down and "engine down" or (state.project or "all")
+	end
+	return ""
+end
 
 local function render_menu()
-	if not (menu_buf and vim.api.nvim_buf_is_valid(menu_buf)) then
-		return
-	end
-	local width = menu_win and vim.api.nvim_win_is_valid(menu_win) and vim.api.nvim_win_get_width(menu_win)
-		or menu_width()
-	local lines = {}
+	local list = {}
 	for _, name in ipairs(sections) do
-		local count = tostring(#state.entries[name])
-		-- Two columns in front, where fzf keeps its pointer and marker.
-		table.insert(lines, "  " .. name .. string.rep(" ", math.max(width - #name - #count - 3, 1)) .. count)
+		table.insert(list, { name = name, kind = section_kind(name) })
 	end
-	vim.bo[menu_buf].modifiable = true
-	vim.api.nvim_buf_set_lines(menu_buf, 0, -1, false, lines)
-	vim.bo[menu_buf].modifiable = false
-	vim.api.nvim_buf_clear_namespace(menu_buf, ns, 0, -1)
-	for i, line in ipairs(lines) do
-		local selected = i == state.section
-		vim.api.nvim_buf_set_extmark(menu_buf, ns, i - 1, 0, {
-			end_col = #line,
-			hl_group = selected and "DockerMenuSelected" or "DockerMenu",
-			line_hl_group = selected and "DockerMenuSelected" or nil,
-		})
-		local count_col = #line - #tostring(#state.entries[sections[i]])
-		vim.api.nvim_buf_set_extmark(menu_buf, ns, i - 1, count_col, {
-			end_col = #line,
-			hl_group = selected and "DockerMenuSelected" or "DockerWord",
-			priority = 4200,
-		})
+	state.moving = true
+	cards.render(menu_buf, menu_win, ns, list, function(e)
+		return { e.name, section_detail(e.name), tostring(#state.entries[e.name]) }
+	end, state.section, nil, vim.api.nvim_get_current_win() == menu_win)
+	state.moving = false
+end
+
+local details = {
+	containers = function(e)
+		return e.port and ("localhost:" .. e.port) or (e.container ~= e.name and e.container) or ""
+	end,
+	images = function(e)
+		return e.id
+	end,
+	vms = function(e)
+		return e.dir and vim.fn.fnamemodify(e.dir, ":~") or ""
+	end,
+	desktops = function(e)
+		return e.host
+	end,
+	["vpn devices"] = function(e)
+		return e.dns or e.os
+	end,
+	ports = function(e)
+		return e.process
+	end,
+	scripts = function(e)
+		return e.command
+	end,
+}
+
+local function card(e)
+	local detail = details[section_name()]
+	return { e.name, detail and detail(e) or "", e.word or "" }
+end
+
+local function render_items()
+	local active = vim.api.nvim_get_current_win() == items_win
+	state.moving = true
+	if docker_down() then
+		cards.render(items_buf, items_win, ns, { { name = "docker engine", word = "down", kind = "bad" } }, function(e)
+			return { e.name, "brew services start colima", e.word }
+		end, nil, nil, active)
+	else
+		local _, index = current_entry()
+		cards.render(items_buf, items_win, ns, state.entries[section_name()], card, index, "no " .. section_name(), active)
 	end
+	state.moving = false
 end
 
 -- Content -----------------------------------------------------------------------------------------
@@ -385,6 +431,7 @@ local set_actions
 
 local function redraw()
 	render_menu()
+	render_items()
 	set_actions()
 	show()
 	report()
@@ -472,7 +519,7 @@ local function step_tab(delta, direction)
 		target = target or list[delta > 0 and #list or 1]
 	end
 	if not target then
-		return hand_off(direction)
+		return direction and hand_off(direction)
 	end
 	state.current[section_name()] = target.id
 	state.mode = "logs"
@@ -497,7 +544,7 @@ local function step_section(delta, direction)
 		target = math.max(1, math.min(#sections, target))
 	end
 	if not sections[target] then
-		return hand_off(direction)
+		return direction and hand_off(direction)
 	end
 	state.section = target
 	state.mode = "logs"
@@ -624,8 +671,6 @@ local actions = {
 	["vpn devices"] = tailscale.actions,
 	ports = ports.actions,
 	scripts = scripts.actions,
-	workspaces = workspaces.actions,
-	agents = agents.actions,
 }
 
 -- Like <leader>- on the diff view: closes the whole view, and with it the pane, since WezTerm runs it
@@ -640,13 +685,11 @@ local close = {
 }
 
 -- Pick entries of the current section with fzf-lua, filtering on its status, name, and host or
--- address, colored like the bar's labels. Enter goes to a workspace or agent (starting or resuming
--- it), and elsewhere makes the pick the current tab. Tab marks several
+-- address, colored like the bar's labels. Enter makes the pick the current tab. Tab marks several
 -- (ctrl-a all of them), and CTRL with an action's key runs that action on every marked entry, asking
 -- once for all of them: ctrl-d deletes them, ctrl-s starts or stops them. CTRL, not ALT: Option with
 -- a letter types a character on macOS (∂ for d). Actions that ask for input,
--- work without an entry (add), or only make sense for one (rename, a shell, details, going to a
--- workspace or agent) stay single.
+-- work without an entry (add), or only make sense for one (rename, a shell, details) stay single.
 local kind_colors = { ok = "#77DD77", busy = "#A58BD3", bad = "#E0955A", off = "#8C8C8C", detail = "#3F6F3F" }
 local single = {
 	["<leader>n"] = true,
@@ -692,17 +735,9 @@ local find = {
 			return out
 		end
 		local fzf_actions = {
-			-- Sections whose entries are somewhere to go (workspaces, agents) go there, or start or
-			-- resume every marked one; the others show the pick.
 			["enter"] = function(selected)
 				local entries = picked(selected)
 				if #entries == 0 or section_name() ~= name then
-					return
-				end
-				if lists[name].enter then
-					for _, e in ipairs(entries) do
-						lists[name].enter(e, view)
-					end
 					return
 				end
 				state.current[name] = entries[1].id
@@ -710,7 +745,7 @@ local find = {
 				redraw()
 			end,
 		}
-		local header = { lists[name].enter and "enter open" or "enter show", "tab mark", "ctrl-a all" }
+		local header = { "enter show", "tab mark", "ctrl-a all" }
 		for _, a in ipairs(actions[name] or {}) do
 			local key = a[1]:match("^<leader>(%a)$")
 			if key and not a.always and not a.single and not single[a[1]] then
@@ -773,7 +808,7 @@ local adopted = {}
 local function buffers()
 	return vim.tbl_filter(function(buf)
 		return buf and vim.api.nvim_buf_is_valid(buf)
-	end, vim.list_extend({ main_buf, menu_buf }, adopted))
+	end, vim.list_extend({ main_buf, menu_buf, items_buf }, adopted))
 end
 
 -- Map the current section's actions on the view's buffers, in place of the last section's, so
@@ -813,38 +848,61 @@ function set_actions()
 	end
 end
 
-local function keymaps(buf, modes)
-	local function map(lhs, fn, desc)
-		vim.keymap.set(modes or "n", lhs, fn, { buffer = buf, desc = desc, nowait = true })
+local function focus(win)
+	if win and vim.api.nvim_win_is_valid(win) then
+		vim.api.nvim_set_current_win(win)
 	end
-	map("<M-Left>", function()
-		step_tab(-1, "Left")
-	end, "previous tab")
-	map("<M-Right>", function()
-		step_tab(1, "Right")
-	end, "next tab")
-	map("<M-Up>", function()
-		step_section(-1, "Up")
-	end, "previous section")
-	map("<M-Down>", function()
-		step_section(1, "Down")
-	end, "next section")
-	-- Normal mode only, a terminal needs g and G typed.
-	vim.keymap.set("n", "gg", function()
-		go_tab(true)
-	end, { buffer = buf, desc = "first entry", nowait = true })
-	vim.keymap.set("n", "G", function()
-		go_tab(false)
-	end, { buffer = buf, desc = "last entry", nowait = true })
-	-- Oil's - (packs/oil.lua) has no folder to open here.
+end
+
+local function keymaps(buf)
 	vim.keymap.set("n", "-", "<nop>", { buffer = buf })
+end
+
+local function list_keymaps(buf, step, go, left, right)
+	local function map(lhs, fn, desc)
+		vim.keymap.set("n", lhs, fn, { buffer = buf, desc = desc, nowait = true })
+	end
+	for _, lhs in ipairs({ "j", "<Down>" }) do
+		map(lhs, function()
+			step(1)
+		end, "next")
+	end
+	for _, lhs in ipairs({ "k", "<Up>" }) do
+		map(lhs, function()
+			step(-1)
+		end, "previous")
+	end
+	map("gg", function()
+		go(true)
+	end, "first")
+	map("G", function()
+		go(false)
+	end, "last")
+	for _, lhs in ipairs({ "h", "<Left>" }) do
+		map(lhs, left, "left column")
+	end
+	for _, lhs in ipairs({ "l", "<Right>" }) do
+		map(lhs, right, "right column")
+	end
+end
+
+local function go_section(first)
+	local target = vim.v.count > 0 and math.min(vim.v.count, #sections) or first and 1 or #sections
+	if target ~= state.section then
+		state.section = target
+		state.mode = "logs"
+		redraw()
+	end
 end
 
 -- Take a section's terminal into the view: its keys, and ALT arrows also in terminal mode, so
 -- moving on needs no leaving it first.
 function view.adopt(buf)
 	vim.b[buf].docker_view = true
-	keymaps(buf, { "n", "t" })
+	keymaps(buf)
+	for _, key in ipairs({ "<M-Left>", "<M-Right>", "<M-Up>", "<M-Down>" }) do
+		vim.keymap.set("t", key, "<C-\\><C-n>" .. key, { buffer = buf, remap = true })
+	end
 	table.insert(adopted, buf)
 	mapped.section = nil
 	set_actions()
@@ -907,32 +965,85 @@ function M.open()
 	vim.cmd("rightbelow vertical " .. menu_width() .. "split")
 	menu_win = vim.api.nvim_get_current_win()
 	vim.api.nvim_win_set_buf(menu_win, menu_buf)
-	plain(menu_win)
-	vim.wo[menu_win].winfixwidth = true
-	vim.wo[menu_win].wrap = false
-	vim.api.nvim_set_current_win(main_win)
 
-	-- The cursor stays in the content; a click in the menu picks that section.
-	vim.api.nvim_create_autocmd("WinEnter", {
-		group = vim.api.nvim_create_augroup("DockerView", { clear = true }),
+	items_buf = scratch("docker://entries")
+	vim.cmd("rightbelow vertical " .. menu_width() .. "split")
+	items_win = vim.api.nvim_get_current_win()
+	vim.api.nvim_win_set_buf(items_win, items_buf)
+
+	for _, win in ipairs({ items_win, menu_win }) do
+		plain(win)
+		vim.wo[win].winfixwidth = true
+		vim.wo[win].wrap = false
+		vim.wo[win].scrolloff = cards.height
+		vim.api.nvim_win_set_width(win, menu_width())
+	end
+
+	list_keymaps(menu_buf, function(delta)
+		step_section(delta)
+	end, go_section, function()
+		focus(main_win)
+	end, function()
+		focus(items_win)
+	end)
+	list_keymaps(items_buf, function(delta)
+		step_tab(delta)
+	end, go_tab, function()
+		focus(menu_win)
+	end, function()
+		hand_off("Right")
+	end)
+
+	local group = vim.api.nvim_create_augroup("DockerView", { clear = true })
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = menu_buf,
 		callback = function()
-			if vim.api.nvim_get_current_win() ~= menu_win then
-				return
-			end
-			local line = vim.api.nvim_win_get_cursor(menu_win)[1]
-			vim.api.nvim_set_current_win(main_win)
-			if sections[line] and line ~= state.section then
-				state.section = line
+			local index = not state.moving and cards.index_at(vim.api.nvim_win_get_cursor(menu_win)[1])
+			if index and sections[index] and index ~= state.section then
+				state.section = index
 				state.mode = "logs"
 				redraw()
+			elseif not state.moving then
+				render_menu()
 			end
 		end,
 	})
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = "DockerView",
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = items_buf,
 		callback = function()
+			local index = not state.moving and cards.index_at(vim.api.nvim_win_get_cursor(items_win)[1])
+			local e = index and state.entries[section_name()][index]
+			if e and e.id ~= state.current[section_name()] then
+				state.current[section_name()] = e.id
+				state.mode = "logs"
+				redraw()
+			elseif not state.moving then
+				render_items()
+			end
+		end,
+	})
+	local default_cursor = vim.o.guicursor
+	vim.api.nvim_create_autocmd("WinEnter", {
+		group = group,
+		callback = function()
+			local win = vim.api.nvim_get_current_win()
+			local list = win == menu_win or win == items_win
+			vim.o.guicursor = list and "n-v-sm:block-SidebarCursor,i-c-ci-ve:ver25,r-cr-o:hor20" or default_cursor
+			render_menu()
+			render_items()
+		end,
+	})
+	vim.api.nvim_set_current_win(menu_win)
+	vim.o.guicursor = "n-v-sm:block-SidebarCursor,i-c-ci-ve:ver25,r-cr-o:hor20"
+	vim.api.nvim_create_autocmd("VimLeavePre", {
+		group = group,
+		callback = function()
+			-- A job that already finished raises on kill, which would hold up quitting (:restart) at
+			-- a prompt with the view's bar entry already gone.
 			if job then
-				job:kill(15)
+				pcall(job.kill, job, 15)
 			end
 			vim.api.nvim_ui_send("\27]1337;SetUserVar=docker_view=\7")
 		end,

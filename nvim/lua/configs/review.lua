@@ -110,7 +110,7 @@ local function comment_at(buf, lnum)
 end
 
 -- Small floating editor that wraps and grows with its text, like a textarea.
--- <C-s> or <CR> in normal mode saves, <C-y> sends right away, q or <Esc> in normal mode cancels, and
+-- <C-s> or <CR> in normal mode saves, <C-S-s> sends right away, q or <Esc> in normal mode cancels, and
 -- so does leaving it (a click elsewhere).
 -- It spans the window it opens from, its left edge on that window's number column, under the cursor
 -- line, or above it when the window has no room below; it never grows past that window.
@@ -142,7 +142,7 @@ local function edit(title, initial, on_save)
 		border = { " ", " ", " ", " ", " ", " ", " ", " " },
 		title = { { "  " .. title, "ReviewNoteTitle" } },
 		title_pos = "left",
-		footer = { { "<C-s> save · <C-y> send · q cancel ", "ReviewNoteHint" } },
+		footer = { { "Ctrl + s save · Ctrl + S send · q cancel ", "ReviewNoteHint" } },
 		footer_pos = "right",
 		style = "minimal",
 	})
@@ -192,7 +192,7 @@ local function edit(title, initial, on_save)
 	vim.keymap.set("n", "<CR>", function()
 		save(false)
 	end, { buffer = buf })
-	vim.keymap.set({ "n", "i" }, "<C-y>", function()
+	vim.keymap.set({ "n", "i" }, "<C-S-s>", function()
 		save(true)
 	end, { buffer = buf })
 	vim.keymap.set("n", "q", close, { buffer = buf })

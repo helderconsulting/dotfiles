@@ -52,6 +52,18 @@ local highlights = {
 	DockerWordBad = { fg = palette.orange },
 	DockerMenu = { fg = palette.green },
 	DockerMenuSelected = { fg = palette.bright, bg = "#0F2A0F", bold = true },
+	-- Sidebar (configs/sidebar.lua): cards with an edge and status in the agent states' colors, the
+	-- current card on fzf-lua's bg+.
+	SidebarName = { fg = palette.green },
+	SidebarNameCurrent = { fg = palette.bright, bold = true },
+	SidebarDetail = { fg = palette.dim },
+	SidebarCard = { bg = "#0F2A0F" },
+	SidebarCardInactive = { bg = "#0B1A0B" },
+	SidebarCursor = { fg = "#0F2A0F", bg = "#0F2A0F" },
+	SidebarOk = { fg = palette.green },
+	SidebarBusy = { fg = palette.purple },
+	SidebarBad = { fg = palette.orange },
+	SidebarOff = { fg = "#8C8C8C" },
 	-- Window separators match WezTerm's split lines and agent bar edges.
 	WinSeparator = { fg = "#223022" },
 }

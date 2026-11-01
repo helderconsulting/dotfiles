@@ -17,6 +17,7 @@ config.tab_bar_at_bottom = true
 config.hide_tab_bar_if_only_one_tab = true
 
 config.native_macos_fullscreen_mode = true
+config.enable_kitty_keyboard = true
 
 local function navigate(direction, fallback_direction)
 	return wezterm.action_callback(function(win, pane)
