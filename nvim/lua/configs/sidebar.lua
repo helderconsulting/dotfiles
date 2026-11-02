@@ -141,7 +141,7 @@ local function thread_index()
 			return i
 		end
 	end
-	return state.thread[1] and 1 or nil
+	return #state.thread > 0 and #state.thread or nil
 end
 
 local function render()
@@ -162,6 +162,7 @@ local function render()
 		end, {
 			selected = thread_index(),
 			empty = "no messages or reviews",
+			wrap = true,
 			active = current == side_win,
 		})
 	end
@@ -561,7 +562,7 @@ function M.open()
 			if state.moving then
 				return
 			end
-			local index = cards.index_at(vim.api.nvim_win_get_cursor(side_win)[1])
+			local index = cards.index_at(vim.api.nvim_win_get_cursor(side_win)[1], side_buf)
 			local item = index and state.thread[index]
 			if item and item.id ~= state.thread_current then
 				state.thread_current = item.id

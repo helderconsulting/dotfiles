@@ -307,6 +307,9 @@ local function agent_info(pane)
 	if not title or title == "" then
 		title = pane_title:gsub("^[^%w]+", "")
 	end
+	if title == "" or title == "Claude Code" then
+		title = (fields[5] ~= "" and fields[5]) or (fields[3] or ""):match("[^/]+$") or title
+	end
 	return {
 		agent = agent,
 		state = state,
@@ -753,17 +756,27 @@ local function record_workspaces()
 end
 
 local last_focus
-local last_order
+local last_order = {}
 
 -- The pane ids of the bar entries, in bar order, for agent-jump (CTRL|ALT number in AeroSpace).
-local function record_order(order)
+local last_window
+local function record_order(order, window)
+	local id = window:window_id()
 	local text = table.concat(order, "\n") .. "\n"
-	if text ~= last_order then
-		local f = io.open(state_dir .. "/bar", "w")
+	if text ~= last_order[id] then
+		local f = io.open(state_dir .. "/bar-" .. id, "w")
 		if f then
 			f:write(text)
 			f:close()
-			last_order = text
+			last_order[id] = text
+		end
+	end
+	if window:is_focused() and last_window ~= id then
+		local f = io.open(state_dir .. "/bar-window", "w")
+		if f then
+			f:write(id, "\n")
+			f:close()
+			last_window = id
 		end
 	end
 end
@@ -813,7 +826,7 @@ local function refresh(window)
 	local entries = bar_entries(window)
 	record_focus(entries)
 	local items, order = bar_items(window, entries)
-	record_order(order)
+	record_order(order, window)
 	record_workspaces()
 	window:set_left_status(wezterm.format(items))
 
@@ -1428,7 +1441,7 @@ function M.apply(config)
 				end
 			end)
 		end
-		return pane.title
+		return pane.title .. "  [w" .. id .. "]"
 	end)
 end
 

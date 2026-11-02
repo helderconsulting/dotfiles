@@ -1,15 +1,38 @@
 #!/bin/sh
 # Focus the Nth entry of the WezTerm agent bar from anywhere, and bring WezTerm forward on its
-# AeroSpace workspace. Bound to ctrl-alt-N in aerospace.toml. The bar order is written by
-# wezterm/agents.lua. Full paths: AeroSpace runs this without the shell's PATH.
+# AeroSpace workspace. Bound to ctrl-alt-N in aerospace.toml. Each WezTerm window writes its bar
+# order to bar-<window id> (wezterm/agents.lua) and ends its title with "[w<window id>]", so the
+# AeroSpace window and the WezTerm window can be matched. Full paths: AeroSpace runs this without
+# the shell's PATH.
 #
 #   agent-jump <n>
 
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status"
-pane=$(sed -n "${1}p" "$state_dir/bar" 2>/dev/null)
+wezterm=/opt/homebrew/bin/wezterm
+aerospace=/opt/homebrew/bin/aerospace
+bundle=com.github.wez.wezterm
+
+pick() {
+	sed -n 's/^\([0-9]*\)|.*\[w\([0-9]*\)\]$/\1 \2/p' | head -1
+}
+
+target=$($aerospace list-windows --focused --format '%{window-id}|%{app-bundle-id}|%{window-title}' 2>/dev/null |
+	grep "|$bundle|" | sed "s/|$bundle|/|/" | pick)
+[ -n "$target" ] || target=$($aerospace list-windows --workspace focused --app-bundle-id $bundle \
+	--format '%{window-id}|%{window-title}' 2>/dev/null | pick)
+if [ -z "$target" ]; then
+	last=$(cat "$state_dir/bar-window" 2>/dev/null)
+	target=$($aerospace list-windows --monitor all --app-bundle-id $bundle \
+		--format '%{window-id}|%{window-title}' 2>/dev/null | grep "\[w$last\]$" | pick)
+fi
+[ -n "$target" ] || target=$($aerospace list-windows --monitor all --app-bundle-id $bundle \
+	--format '%{window-id}|%{window-title}' 2>/dev/null | pick)
+[ -n "$target" ] || exit 0
+aero=${target% *}
+window=${target#* }
+
+pane=$(sed -n "${1}p" "$state_dir/bar-$window" 2>/dev/null)
 [ -n "$pane" ] || exit 0
 
-/opt/homebrew/bin/wezterm cli activate-pane --pane-id "$pane"
-window=$(/opt/homebrew/bin/aerospace list-windows --monitor all --app-bundle-id com.github.wez.wezterm \
-	--format '%{window-id}' | head -1)
-[ -n "$window" ] && /opt/homebrew/bin/aerospace focus --window-id "$window"
+$wezterm cli activate-pane --pane-id "$pane"
+$aerospace focus --window-id "$aero"

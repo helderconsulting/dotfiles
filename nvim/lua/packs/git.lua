@@ -79,6 +79,28 @@ if ok_codediff then
 			error(err, 0)
 		end
 	end
+
+	local function wrap(win)
+		if win and vim.api.nvim_win_is_valid(win) then
+			vim.wo[win].wrap = true
+			vim.wo[win].linebreak = true
+			vim.wo[win].breakindent = true
+		end
+	end
+	local render = require("codediff.ui.view.render")
+	local scrollbind = render.establish_scrollbind
+	render.establish_scrollbind = function(orig_win, mod_win, ...)
+		scrollbind(orig_win, mod_win, ...)
+		wrap(orig_win)
+		wrap(mod_win)
+	end
+	local inline = require("codediff.ui.view.inline_view.render")
+	local render_inline = inline.compute_and_render_inline
+	inline.compute_and_render_inline = function(...)
+		local result = render_inline(...)
+		wrap(select(7, ...))
+		return result
+	end
 end
 
 local ok_neogit, neogit = pcall(require, "neogit")

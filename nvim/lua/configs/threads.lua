@@ -44,10 +44,6 @@ function M.messages()
 	return list
 end
 
-local function first_line(text)
-	return ((text or ""):gsub("%s*\n.*", ""))
-end
-
 local function names()
 	local by_session, by_pane = {}, {}
 	for _, w in ipairs(workspaces.running()) do
@@ -92,13 +88,13 @@ function M.items(filter)
 					local range = m.line1 == m.line2 and tostring(m.line1) or (m.line1 .. "-" .. m.line2)
 					card = {
 						place .. label[1] .. " " .. m.path .. ":" .. range,
-						first_line(m.event == "resolved" and m.reply ~= "" and m.reply or m.text),
+						m.event == "resolved" and m.reply ~= "" and m.reply or m.text,
 						workspaces.age(m.at) .. (m.agent and (" · " .. m.agent) or ""),
 					}
 				else
 					card = {
 						place .. label[1],
-						first_line(m.note or (m.event == "approved" and "ready for a merge request" or "")),
+						m.note or (m.event == "approved" and "ready for a merge request" or ""),
 						workspaces.age(m.at) .. (m.agent and (" · " .. m.agent) or ""),
 					}
 				end
@@ -122,14 +118,14 @@ function M.items(filter)
 					id = "m" .. m.at .. (m.from_pane or "") .. (m.to_pane or ""),
 					at = m.at,
 					kind = "busy",
-					card = { who, first_line(m.text), workspaces.age(m.at) },
+					card = { who, m.text or "", workspaces.age(m.at) },
 					pane = from_me and m.to_pane or m.from_pane,
 				})
 			end
 		end
 	end
 	table.sort(items, function(a, b)
-		return (a.at or 0) > (b.at or 0)
+		return (a.at or 0) < (b.at or 0)
 	end)
 	return items
 end

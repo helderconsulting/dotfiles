@@ -1,0 +1,20 @@
+#!/bin/sh
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+input=$(cat)
+[ "$(printf '%s' "$input" | jq -r '.stop_hook_active // false')" = true ] && exit 0
+cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
+[ -d "$cwd" ] || cwd=$PWD
+root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null) || exit 0
+file="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status/review/$(printf '%s' "$root" | tr / %).json"
+[ -s "$file" ] || exit 0
+
+jq '[.comments[]? | select(.status == "sent")] as $open
+	| if ($open | length) == 0 then empty else {
+		decision: "block",
+		reason: ("These review comments are still open:\n"
+			+ ($open | map("- [\(.id)] \(.path):\(.line1)\(if .line2 != .line1 then "-\(.line2)" else "" end)  \(.text | gsub("\n"; " "))") | join("\n"))
+			+ "\n\nReply on each one with `~/.config/wezterm/bin/review resolve <id> \"<what you changed, or why not>\"`."
+			+ " A reply in the chat alone does not reach the review."
+			+ " If one needs the user'"'"'s input first, ask in the chat and stop.")
+	} end' "$file"

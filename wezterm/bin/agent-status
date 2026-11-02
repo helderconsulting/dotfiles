@@ -56,6 +56,10 @@ file="$state_dir/$WEZTERM_PANE"
 # The turn ended (or the session did): a message it received has been answered (agent-message).
 case $state in done | clear) rm -f "$file.message" ;; esac
 
+if [ -z "$title" ] && [ -f "$file" ] && [ "$(cut -f 7 "$file")" = "$session" ]; then
+	title=$(cut -f 6 "$file")
+fi
+
 if [ "$state" = clear ]; then
 	rm -f "$file"
 else

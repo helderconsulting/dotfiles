@@ -70,7 +70,7 @@ local function sync(c)
 		return
 	end
 	local pos = vim.api.nvim_buf_get_extmark_by_id(c.buf, ns, c.mark, { details = true })
-	if pos[1] then
+	if pos[1] and not pos[3].invalid then
 		c.line1 = pos[1] + 1
 		c.line2 = (pos[3].end_row or pos[1]) + 1
 	end
@@ -106,8 +106,11 @@ local looks = {
 
 -- Two extmarks per comment: one spanning the range (sign, tint, tracks edits) and one on the
 -- last line that carries the comment text below the range.
+local attach
+
 local function render(c)
 	sync(c)
+	attach(c.buf)
 	for _, id in ipairs({ c.mark, c.note }) do
 		pcall(vim.api.nvim_buf_del_extmark, c.buf, ns, id)
 	end
@@ -146,6 +149,53 @@ local function render(c)
 	c.note = vim.api.nvim_buf_set_extmark(c.buf, ns, row2, 0, {
 		virt_lines = virt_lines,
 		invalidate = true,
+	})
+end
+
+local attached = {}
+
+local function broken(c)
+	for _, id in ipairs({ c.mark, c.note }) do
+		local pos = id and vim.api.nvim_buf_get_extmark_by_id(c.buf, ns, id, { details = true }) or {}
+		if not pos[1] or pos[3].invalid then
+			return true
+		end
+	end
+	return false
+end
+
+local function repair(buf)
+	if not vim.api.nvim_buf_is_valid(buf) then
+		return
+	end
+	for _, c in ipairs(comments) do
+		if c.buf == buf and broken(c) then
+			render(c)
+		end
+	end
+end
+
+attach = function(buf)
+	if attached[buf] or not vim.api.nvim_buf_is_valid(buf) then
+		return
+	end
+	attached[buf] = true
+	local pending = false
+	local function later()
+		if not pending then
+			pending = true
+			vim.schedule(function()
+				pending = false
+				repair(buf)
+			end)
+		end
+	end
+	vim.api.nvim_buf_attach(buf, false, {
+		on_lines = later,
+		on_reload = later,
+		on_detach = function()
+			attached[buf] = nil
+		end,
 	})
 end
 
