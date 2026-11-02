@@ -466,9 +466,20 @@ local function push_tabs(items, e, focused, width, number)
 	local widths = {}
 	if e.split and width then
 		local avail = left - cw(num)
-		local share = math.floor(avail / #tabs)
+		local need = 0
 		for i = 1, #tabs do
-			widths[i] = i < #tabs and share or avail - share * (#tabs - 1)
+			need = need + natural(i)
+		end
+		if need <= avail then
+			local share = math.floor((avail - need) / #tabs)
+			for i = 1, #tabs do
+				widths[i] = natural(i) + (i < #tabs and share or avail - need - share * (#tabs - 1))
+			end
+		else
+			local share = math.floor(avail / #tabs)
+			for i = 1, #tabs do
+				widths[i] = i < #tabs and share or avail - share * (#tabs - 1)
+			end
 		end
 		widths[1] = widths[1] + cw(num)
 		if e.split_at and #tabs == 2 and e.split_at < left then

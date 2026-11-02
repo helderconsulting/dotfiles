@@ -153,11 +153,30 @@ function M.enter(e)
 	end
 end
 
-local function resume(e)
-	if e.pane then
-		workspaces.request("pane", e.pane)
-	else
-		M.enter(e)
+local state_dir = (vim.env.XDG_STATE_HOME or (vim.env.HOME .. "/.local/state")) .. "/agent-status"
+
+local function stop(e, view, done)
+	view.run({ "wezterm", "cli", "kill-pane", "--pane-id", tostring(e.pane) }, {
+		done = function(res)
+			if res.code == 0 then
+				for _, suffix in ipairs({ "", ".message" }) do
+					os.remove(state_dir .. "/" .. e.pane .. suffix)
+				end
+				view.balance()
+			end
+			if done then
+				done(res)
+			end
+		end,
+	})
+end
+
+local function resume_or_end(e, view)
+	if not e.pane then
+		return M.enter(e)
+	end
+	if view.confirm("end session " .. e.name .. "? it stays resumable") then
+		stop(e, view)
 	end
 end
 
@@ -170,8 +189,8 @@ end
 M.actions = {
 	{
 		"<leader>s",
-		resume,
-		"resume session",
+		resume_or_end,
+		"resume or end session",
 	},
 	{
 		"<leader>a",
@@ -260,11 +279,9 @@ M.actions = {
 			end
 			-- A running one stops first, and gets a moment to stop writing to its file.
 			if e.pane then
-				view.run({ "wezterm", "cli", "kill-pane", "--pane-id", tostring(e.pane) }, {
-					done = function()
-						vim.defer_fn(remove, 500)
-					end,
-				})
+				stop(e, view, function()
+					vim.defer_fn(remove, 500)
+				end)
 			else
 				remove()
 			end

@@ -5,6 +5,53 @@ M.heading = 1
 
 local kinds = { ok = "CardOk", busy = "CardBusy", bad = "CardBad", off = "CardOff" }
 local layouts = {}
+local stickies = {}
+
+local function pin(buf, key, win, ns, lines, marks, first, last, row)
+	stickies[buf] = stickies[buf] or {}
+	local s = stickies[buf][key]
+	if not first then
+		if s and s.win and vim.api.nvim_win_is_valid(s.win) then
+			vim.api.nvim_win_hide(s.win)
+		end
+		return
+	end
+	if not s then
+		s = { buf = vim.api.nvim_create_buf(false, true) }
+		stickies[buf][key] = s
+	end
+	vim.bo[s.buf].modifiable = true
+	vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, vim.list_slice(lines, first, last))
+	vim.bo[s.buf].modifiable = false
+	vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
+	for _, m in ipairs(marks) do
+		if m.line >= first - 1 and m.line <= last - 1 then
+			vim.api.nvim_buf_set_extmark(s.buf, ns, m.line - first + 1, m.col, {
+				end_col = m.end_col,
+				hl_group = m.group,
+				line_hl_group = m.line_group,
+			})
+		end
+	end
+	local config = {
+		relative = "win",
+		win = win,
+		row = row,
+		col = 0,
+		width = vim.api.nvim_win_get_width(win),
+		height = last - first + 1,
+		focusable = false,
+		style = "minimal",
+		border = "none",
+		zindex = 20,
+	}
+	if s.win and vim.api.nvim_win_is_valid(s.win) then
+		vim.api.nvim_win_set_config(s.win, config)
+	else
+		s.win = vim.api.nvim_open_win(s.buf, false, vim.tbl_extend("force", config, { noautocmd = true }))
+		vim.wo[s.win].winhighlight = "NormalFloat:Normal"
+	end
+end
 
 function M.fit(text, width)
 	text = (text or ""):gsub("\n.*", "")
@@ -62,52 +109,69 @@ function M.wrap(text, width, max)
 	return out
 end
 
+local function find(starts, line)
+	local found
+	for i, start in ipairs(starts or {}) do
+		if start <= line then
+			found = i
+		end
+	end
+	return found
+end
+
 function M.first_line(index, buf)
-	local starts = buf and layouts[buf]
-	if starts then
-		return starts[index] or M.heading + 1
+	local layout = buf and layouts[buf]
+	if layout then
+		return layout.starts[index] or M.heading + 1
 	end
 	return M.heading + (index - 1) * M.height + 1
 end
 
 function M.index_at(line, buf)
-	local starts = buf and layouts[buf]
-	if starts then
-		local found
-		for i, start in ipairs(starts) do
-			if start <= line then
-				found = i
-			end
-		end
-		return found
+	local layout = buf and layouts[buf]
+	if layout then
+		return find(layout.starts, line)
 	end
 	return line > M.heading and math.floor((line - M.heading - 1) / M.height) + 1 or nil
+end
+
+function M.inline_at(line, buf)
+	local layout = buf and layouts[buf]
+	if not (layout and layout.inline_first and line >= layout.inline_first and line <= layout.inline_last) then
+		return nil
+	end
+	local i = find(layout.inline_starts, line)
+	return i and layout.inline_index[i]
 end
 
 function M.render(buf, win, ns, list, card, opts)
 	opts = opts or {}
 	local selected, active, marked = opts.selected, opts.active, opts.multi and opts.marked or nil
-	local inset = opts.multi and 4 or 3
 	if not (buf and vim.api.nvim_buf_is_valid(buf) and win and vim.api.nvim_win_is_valid(win)) then
 		return
 	end
 	local width = vim.api.nvim_win_get_width(win)
-	local lines, marks, starts = { "" }, {}, {}
+	local height = vim.api.nvim_win_get_height(win)
+	local lines, marks = opts.frozen and {} or { opts.title and (" " .. opts.title) or "" }, {}
+	local layout = { starts = {}, inline_starts = {}, inline_index = {} }
+	local cursor, view_end, focus
 	local function mark(line, col, end_col, group, line_group)
 		table.insert(marks, { line = line, col = col, end_col = end_col, group = group, line_group = line_group })
 	end
-	for i, e in ipairs(list) do
-		local chosen = i == selected
-		local text = card(e)
+	if opts.title and not opts.frozen then
+		mark(0, 0, #lines[1], "CardOffDetail")
+	end
+	local function add(e, text, o)
 		local kind = kinds[e.kind] or "CardOff"
-		local mark_on = marked and marked[e.id]
-		local bg = chosen and (active == false and kind .. "BgInactive" or kind .. "Bg") or mark_on and "CardMarkedBg" or nil
-		local groups = { chosen and active ~= false and kind .. "Current" or kind, kind .. "Detail", kind }
+		local bg = o.chosen and (o.active == false and kind .. "BgInactive" or kind .. "Bg") or o.mark_on and "CardMarkedBg" or nil
+		local groups = { o.chosen and o.active ~= false and kind .. "Current" or kind, kind .. "Detail", kind }
+		local prefix = o.indent .. "▌"
+		local inset = vim.fn.strdisplaywidth(o.indent) + (o.multi and 4 or 3)
 		local rows = {}
-		for k = 1, 3 do
+		for k = 1, o.rows or 3 do
 			local parts
-			if opts.wrap and k < 3 then
-				local max = k == 1 and 2 or chosen and math.max(vim.api.nvim_win_get_height(win) - 6, 3) or 2
+			if o.wrap and k < 3 then
+				local max = k == 1 and 2 or o.chosen and math.max(math.floor(height / 3), 3) or 2
 				parts = M.wrap(text[k], width - inset, max)
 			else
 				parts = { M.fit(text[k], width - inset) }
@@ -116,24 +180,92 @@ function M.render(buf, win, ns, list, card, opts)
 				table.insert(rows, { part, groups[k] })
 			end
 		end
-		starts[i] = #lines + 1
+		local first = #lines + 1
 		for _, row in ipairs(rows) do
-			local gap = mark_on and "▌ " or opts.multi and "  " or " "
-			local line_text = "▌" .. gap .. row[1]
+			local gap = o.mark_on and "▌ " or o.multi and "  " or " "
+			local line_text = prefix .. gap .. row[1]
 			table.insert(lines, line_text)
-			mark(#lines - 1, 0, #"▌", kind)
-			mark(#lines - 1, #"▌", #line_text, row[2], bg)
-			if mark_on then
-				mark(#lines - 1, #"▌", #"▌▌", "CardMarked")
+			mark(#lines - 1, #o.indent, #prefix, kind)
+			mark(#lines - 1, #prefix, #line_text, row[2], bg)
+			if o.mark_on then
+				mark(#lines - 1, #prefix, #prefix + #"▌", "CardMarked")
 			end
 		end
-		if chosen and active ~= false then
+		if o.chosen and o.active ~= false then
 			local card_bg = vim.api.nvim_get_hl(0, { name = kind .. "Bg" }).bg
-			local fg = mark_on and vim.api.nvim_get_hl(0, { name = "CardMarked" }).fg or card_bg
+			local fg = o.mark_on and vim.api.nvim_get_hl(0, { name = "CardMarked" }).fg or card_bg
 			vim.api.nvim_set_hl(0, "CardCursor", { fg = fg, bg = card_bg })
+			cursor = { first, #prefix }
+		end
+		return first
+	end
+	for i, e in ipairs(list) do
+		local chosen = i == selected
+		layout.starts[i] = add(e, card(e), {
+			chosen = chosen,
+			active = active,
+			mark_on = marked and marked[e.id],
+			multi = opts.multi,
+			indent = "",
+			wrap = opts.wrap,
+			rows = opts.rows,
+		})
+		if chosen then
+			view_end = #lines
+		end
+		local inline = chosen and opts.inline
+		if inline and #inline.items > 0 then
+			local from = inline.from or inline.limit and math.max(1, #inline.items - inline.limit + 1) or 1
+			local to = math.min(inline.to or #inline.items, #inline.items)
+			local first_hint = inline.active
+				and ((inline.selected or from) .. " of " .. #inline.items .. " · " .. (from > 1 and ("↑ " .. (from - 1) .. " older") or "start of thread"))
+				or nil
+			if first_hint then
+				table.insert(lines, "")
+				table.insert(lines, "  " .. first_hint)
+				mark(#lines - 1, 0, #lines[#lines], "CardOffDetail")
+				table.insert(lines, "")
+			end
+			layout.inline_first = #lines + 1
+			for t = from, to do
+				local item = inline.items[t]
+				table.insert(layout.inline_starts, add(item, inline.card(item), {
+					chosen = t == inline.selected,
+					active = inline.active,
+					indent = "  ",
+					wrap = true,
+				}))
+				table.insert(layout.inline_index, t)
+				if inline.active and t == inline.selected then
+					view_end = #lines
+					focus = { layout.inline_starts[#layout.inline_starts], #lines }
+				end
+			end
+			layout.inline_last = #lines
+			local last_hint = inline.active and (to < #inline.items and ("↓ " .. (#inline.items - to) .. " newer") or "latest") or nil
+			if last_hint then
+				table.insert(lines, "")
+				table.insert(lines, "  " .. last_hint)
+				mark(#lines - 1, 0, #lines[#lines], "CardOffDetail")
+				if inline.selected == to then
+					view_end = #lines
+				end
+				if not opts.frozen then
+					table.insert(lines, "")
+				end
+			end
+			if inline.selected and inline.active then
+				for k, t in ipairs(layout.inline_index) do
+					if t == inline.selected then
+						cursor = { layout.inline_starts[k], #"  ▌" }
+					end
+				end
+			elseif chosen then
+				cursor = { layout.starts[i], #"▌" }
+			end
 		end
 	end
-	layouts[buf] = opts.wrap and starts or nil
+	layouts[buf] = layout
 	if #list == 0 then
 		table.insert(lines, "  " .. (opts.empty or "nothing here"))
 		mark(#lines - 1, 0, #lines[#lines], "CardOffDetail")
@@ -149,8 +281,42 @@ function M.render(buf, win, ns, list, card, opts)
 			line_hl_group = m.line_group,
 		})
 	end
+	local head, foot
 	if selected then
-		vim.api.nvim_win_set_cursor(win, { M.first_line(selected, buf), #"▌" })
+		cursor = cursor or { M.first_line(selected, buf), #"▌" }
+		vim.api.nvim_win_set_cursor(win, cursor)
+		if opts.frozen and layout.inline_first then
+			local fixed_top = layout.inline_first - 1
+			local fixed_bottom = #lines - layout.inline_last
+			local area = math.max(height - fixed_top - fixed_bottom, 1)
+			local top = 1
+			if focus then
+				top = math.floor((focus[1] + focus[2]) / 2 - fixed_top - (area - 1) / 2 + 0.5)
+				top = math.min(top, #lines - height + 1)
+				top = math.min(top, focus[1] - fixed_top)
+			end
+			top = math.max(1, top)
+			vim.api.nvim_win_call(win, function()
+				vim.fn.winrestview({ topline = top })
+			end)
+			if top > 1 then
+				head = { 1, fixed_top, 0 }
+			end
+			if fixed_bottom > 0 and top + height - 1 < #lines then
+				foot = { #lines - fixed_bottom + 1, #lines, height - fixed_bottom }
+			end
+		elseif opts.keep_visible and view_end then
+			vim.api.nvim_win_call(win, function()
+				local top = vim.fn.winsaveview().topline
+				top = math.max(top, view_end - height + 1)
+				top = math.max(1, math.min(top, cursor[1] - 1))
+				vim.fn.winrestview({ topline = top })
+			end)
+		end
+	end
+	if opts.keep_visible or opts.frozen or stickies[buf] then
+		pin(buf, "head", win, ns, lines, marks, head and head[1], head and head[2], head and head[3])
+		pin(buf, "foot", win, ns, lines, marks, foot and foot[1], foot and foot[2], foot and foot[3])
 	end
 end
 
