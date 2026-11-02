@@ -10,7 +10,8 @@
 # wezterm come from Homebrew.
 PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status"
-to=$(jq -r '.tool_input.to // empty' 2>/dev/null)
+input=$(cat)
+to=$(printf '%s' "$input" | jq -r '.tool_input.to // empty' 2>/dev/null)
 [ -n "$to" ] || exit 0
 
 # The recipient's process: from its socket path, or by name from Claude Code's session registry.
@@ -37,7 +38,20 @@ if [ ! -f "$file" ]; then
 	cwd=$(jq -r '.cwd // empty' "$HOME/.claude/sessions/$pid.json" 2>/dev/null)
 	printf 'claude\tidle\t%s\t\t\t\n' "$cwd" >"$file.$$" && mv "$file.$$" "$file"
 fi
-: >"$file.message"
+date +%s >"$file.message"
+
+to_session=$(cut -f7 "$file" 2>/dev/null)
+to_root=$(cut -f3 "$file" 2>/dev/null)
+printf '%s' "$input" | jq -c \
+	--argjson at "$(date +%s)" \
+	--arg from_pane "${WEZTERM_PANE:-}" \
+	--argjson to_pane "$pane" \
+	--arg to_session "$to_session" \
+	--arg to_root "$to_root" \
+	'{at: $at, from_pane: ($from_pane | tonumber? // null), from_session: .session_id, from_root: .cwd,
+		to: .tool_input.to, to_pane: $to_pane, to_session: $to_session, to_root: $to_root,
+		text: (.tool_input.message // .tool_input.content // "" | if type == "string" then . else tojson end)}' \
+	>>"$state_dir/threads.jsonl" 2>/dev/null
 
 # Redraw the agent bar (see agent-status).
 wezterm cli set-window-title "agents $$" >/dev/null 2>&1

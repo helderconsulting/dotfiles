@@ -96,7 +96,100 @@ end, { desc = "open git panel" })
 -- yet (codediff's "working tree is clean" page), so it can follow an agent that just started; its
 -- auto refresh fills it in as files change. It uses codediff's view directly, falling back to the
 -- command if that ever breaks.
+local function same_path(a, b)
+	return (vim.uv.fs_realpath(a) or a) == (vim.uv.fs_realpath(b) or b)
+end
+
+local function git_sync(root, ...)
+	local out = vim.system({ "git", "-C", root, ... }, { text = true }):wait()
+	return out.code == 0 and vim.trim(out.stdout) or nil
+end
+
+local defaults = {}
+local function default_branch(root)
+	if defaults[root] ~= nil then
+		return defaults[root] or nil
+	end
+	local base = git_sync(root, "symbolic-ref", "--short", "refs/remotes/origin/HEAD")
+	if not base then
+		for _, ref in ipairs({ "origin/main", "origin/master", "main", "master" }) do
+			if not base and git_sync(root, "rev-parse", "--verify", "--quiet", ref) then
+				base = ref
+			end
+		end
+	end
+	defaults[root] = base or false
+	return base
+end
+
+local trunks = { main = true, master = true, development = true, develop = true, dev = true, staging = true, trunk = true }
+local function is_trunk(branch, default)
+	return trunks[branch] or default ~= nil and (branch == default or default:match("^[^/]+/(.+)$") == branch)
+end
+
+local bases = {}
+local function base_branch(root, branch)
+	branch = branch or git_sync(root, "symbolic-ref", "--short", "-q", "HEAD")
+	local rev = branch or git_sync(root, "rev-parse", "HEAD") or "HEAD"
+	local key = root .. "\t" .. rev
+	if bases[key] ~= nil then
+		return bases[key] or nil
+	end
+	local default = default_branch(root)
+	if branch and is_trunk(branch, default) then
+		local upstream = git_sync(root, "rev-parse", "--abbrev-ref", branch .. "@{upstream}")
+		bases[key] = upstream or false
+		return upstream
+	end
+	local main = (git_sync(root, "worktree", "list", "--porcelain") or ""):match("^worktree ([^\n]+)")
+	local out = git_sync(
+		root,
+		"for-each-ref",
+		"--format=%(refname)%09%(refname:short)%09%(ahead-behind:" .. rev .. ")%09%(worktreepath)%09%(symref)",
+		"refs/heads",
+		"refs/remotes"
+	)
+	local best
+	for line in vim.gsplit(out or "", "\n") do
+		local ref, name, ahead, behind, rest = line:match("^([^\t]+)\t([^\t]+)\t(%d+) (%d+)\t?(.*)$")
+		local worktree, symref = (rest or ""):match("^([^\t]*)\t?(.*)$")
+		local short = ref and (ref:match("^refs/heads/(.+)$") or ref:match("^refs/remotes/[^/]+/(.+)$"))
+		local remote = ref and ref:match("^refs/remotes/") ~= nil
+		local trunk = short and is_trunk(short, default)
+		local skip = not ref or symref ~= "" or short == branch
+			or not remote and not trunk and worktree ~= "" and not (main and same_path(worktree, main))
+			or not remote and not trunk and behind == "0" and ahead ~= "0"
+		if not skip then
+			local c = {
+				name = name,
+				behind = tonumber(behind),
+				rank = name == default and 0 or trunk and 1 or remote and 2 or 3,
+				ahead = tonumber(ahead),
+			}
+			if not best or c.behind < best.behind
+				or c.behind == best.behind and (c.rank < best.rank or c.rank == best.rank and c.ahead < best.ahead) then
+				best = c
+			end
+		end
+	end
+	local base = best and best.name or default
+	bases[key] = base or false
+	return base
+end
+
+local function commits_ahead(root, base)
+	local out = vim.system({ "git", "-C", root, "rev-list", "--count", base .. "..HEAD" }, { text = true }):wait()
+	return out.code == 0 and tonumber(vim.trim(out.stdout)) or 0
+end
+
+local opening_branch = false
 local function open_diff(root)
+	local base = base_branch(root)
+	opening_branch = base ~= nil and commits_ahead(root, base) > 0
+	if opening_branch then
+		vim.cmd("CodeDiff --repo " .. vim.fn.fnameescape(root) .. " " .. base .. "...")
+		return
+	end
 	local ok = pcall(function()
 		local path = require("codediff.core.path")
 		require("codediff.core.git").get_status_with_line_stats(root, function(err, status)
@@ -150,17 +243,13 @@ local state_dir = (vim.env.XDG_STATE_HOME or (vim.env.HOME .. "/.local/state")) 
 local target -- worktree root of the last focused agent
 local switching = {} -- tabs whose view is being reopened; their tab events must not start another
 
-local function same_path(a, b)
-	return (vim.uv.fs_realpath(a) or a) == (vim.uv.fs_realpath(b) or b)
-end
-
 -- Git views that follow the focused agent. Each tab showing one records the root it shows in
 -- vim.t.git_view_root when the view opens (the cwd moves with the agent, so it can't be derived
 -- later). switch(tab) replaces the tab's view with one on target and calls done once it is up.
 local views = {
 	codediff = {
 		-- codediff opens asynchronously: open the new view, close the old one once it is up.
-		switch = function(tab, done)
+		switch = function(tab, done, root)
 			vim.api.nvim_create_autocmd("User", {
 				pattern = "CodeDiffOpen",
 				once = true,
@@ -169,7 +258,7 @@ local views = {
 					done()
 				end,
 			})
-			open_diff(target)
+			open_diff(root or target)
 		end,
 	},
 	neogit = {
@@ -200,6 +289,8 @@ vim.api.nvim_create_autocmd("User", {
 		local session = require("codediff.ui.lifecycle").get_session(tab)
 		if session and session.git_root then
 			vim.t[tab].git_view, vim.t[tab].git_view_root = "codediff", session.git_root
+			vim.t[tab].git_view_branch = opening_branch
+			M.refresh_info(tab)
 		end
 	end,
 })
@@ -209,9 +300,66 @@ vim.api.nvim_create_autocmd("BufWinEnter", {
 	callback = function(ev)
 		if vim.bo[ev.buf].filetype == "NeogitStatus" then
 			vim.t.git_view, vim.t.git_view_root = "neogit", vim.fs.root(vim.fn.getcwd(), ".git")
+			M.refresh_info(vim.api.nvim_get_current_tabpage())
 		end
 	end,
 })
+
+local function git_async(root, args, done)
+	vim.system(vim.list_extend({ "git", "-C", root }, args), { text = true }, function(res)
+		vim.schedule(function()
+			done(res.code == 0 and vim.trim(res.stdout) or nil)
+		end)
+	end)
+end
+
+function M.refresh_info(tab)
+	local root = vim.api.nvim_tabpage_is_valid(tab) and vim.t[tab].git_view_root
+	if not root then
+		return
+	end
+	local base = base_branch(root)
+	git_async(root, { "branch", "--show-current" }, function(branch)
+		git_async(root, { "rev-list", "--left-right", "--count", (base or "HEAD") .. "...HEAD" }, function(counts)
+			local behind, ahead = (counts or ""):match("(%d+)%s+(%d+)")
+			git_async(root, { "merge-base", base or "HEAD", "HEAD" }, function(mb)
+				git_async(root, { "diff", "--shortstat", mb or "HEAD" }, function(stat)
+					git_async(root, { "status", "--porcelain" }, function(porcelain)
+						if not vim.api.nvim_tabpage_is_valid(tab) or vim.t[tab].git_view_root ~= root then
+							return
+						end
+						stat = stat or ""
+						vim.t[tab].git_info = {
+							branch = branch ~= "" and branch or "detached",
+							base = base and base:gsub("^origin/", "") or nil,
+							ahead = tonumber(ahead) or 0,
+							behind = tonumber(behind) or 0,
+							files = tonumber(stat:match("(%d+) files? changed")) or 0,
+							added = tonumber(stat:match("(%d+) insertions?")) or 0,
+							removed = tonumber(stat:match("(%d+) deletions?")) or 0,
+							uncommitted = porcelain and porcelain ~= "" and #vim.split(porcelain, "\n") or 0,
+						}
+						vim.api.nvim_exec_autocmds("User", { pattern = "GitInfo" })
+						if vim.t[tab].git_view == "codediff" and not vim.t[tab].git_view_branch and (tonumber(ahead) or 0) > 0
+							and tab == vim.api.nvim_get_current_tabpage() and not switching[tab] then
+							switching[tab] = true
+							views.codediff.switch(tab, function()
+								switching[tab] = nil
+							end, root)
+						end
+					end)
+				end)
+			end)
+		end)
+	end)
+end
+
+vim.uv.new_timer():start(3000, 3000, vim.schedule_wrap(function()
+	local tab = vim.api.nvim_get_current_tabpage()
+	if vim.t[tab].git_view then
+		M.refresh_info(tab)
+	end
+end))
 
 local function follow_in_current_tab()
 	if not target or vim.fn.isdirectory(target) == 0 then
@@ -468,28 +616,11 @@ vim.keymap.set("n", "<leader>gw", function()
 end, { desc = "switch worktree" })
 
 -- <leader>gb previews a branch the way a GitHub or GitLab merge request shows it: its commits since
--- it left the default branch (base...branch, from their merge base), nothing checked out. The
--- default branch is the remote's, else the local main or master.
-local function default_branch(root)
-	local function git(...)
-		local out = vim.system({ "git", "-C", root, ... }, { text = true }):wait()
-		return out.code == 0 and vim.trim(out.stdout) or nil
-	end
-	local head = git("symbolic-ref", "--short", "refs/remotes/origin/HEAD")
-	if head then
-		return head
-	end
-	for _, ref in ipairs({ "origin/main", "origin/master", "main", "master" }) do
-		if git("rev-parse", "--verify", "--quiet", ref) then
-			return ref
-		end
-	end
-end
-
+-- it left the branch it was cut from (base...branch, from their merge base), nothing checked out.
 vim.keymap.set("n", "<leader>gb", function()
 	local root = vim.fs.root(target or vim.fn.getcwd(), ".git")
-	local base = root and default_branch(root)
-	if not base then
+	local default = root and default_branch(root)
+	if not default then
 		return vim.notify(root and "no default branch found" or "not in a git repository", vim.log.levels.WARN)
 	end
 	local out = vim.system({
@@ -499,20 +630,21 @@ vim.keymap.set("n", "<leader>gb", function()
 	local list = {}
 	for line in vim.gsplit(vim.trim(out.stdout or ""), "\n") do
 		local branch, age, worktree = line:match("^([^\t]+)\t([^\t]*)\t?(.*)$")
-		if branch and branch ~= base and "origin/" .. branch ~= base then
+		if branch and branch ~= default and "origin/" .. branch ~= default then
 			table.insert(list, { branch = branch, age = age, worktree = worktree })
 		end
 	end
 	if #list == 0 then
-		return vim.notify("no branches besides " .. base, vim.log.levels.INFO)
+		return vim.notify("no branches besides " .. default, vim.log.levels.INFO)
 	end
 	vim.ui.select(list, {
-		prompt = base .. "...",
+		prompt = "preview branch",
 		format_item = function(b)
 			return ("%-32s %-16s %s"):format(b.branch, b.age, b.worktree ~= "" and vim.fn.fnamemodify(b.worktree, ":~") or "")
 		end,
 	}, function(b)
 		if b then
+			local base = is_trunk(b.branch, default) and default or base_branch(root, b.branch) or default
 			vim.cmd("CodeDiff --repo " .. vim.fn.fnameescape(root) .. " " .. base .. "..." .. b.branch)
 		end
 	end)

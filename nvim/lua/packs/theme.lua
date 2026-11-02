@@ -40,6 +40,12 @@ local highlights = {
 	ReviewNoteLine = { bg = "#120F18" },
 	ReviewNoteTitle = { fg = palette.purple, bg = "#120F18", bold = true },
 	ReviewNoteHint = { fg = "#505050", bg = "#120F18" },
+	ReviewSent = { fg = palette.orange, italic = true },
+	ReviewSentSign = { fg = palette.orange, bold = true },
+	ReviewResolved = { fg = palette.dim, italic = true },
+	ReviewResolvedSign = { fg = palette.green, bold = true },
+	ReviewReady = { fg = palette.bright, bold = true },
+	ReviewStatus = { fg = "#6A6280" },
 	InfoFloat = { bg = "#0C140C" },
 	-- Docker view (configs/docker.lua): tabs like the bar's entries, sections like fzf-lua's list
 	-- (packs/fzf.lua: fg+ on bg+, bold like fzf's current line), container status in the agent
@@ -52,21 +58,25 @@ local highlights = {
 	DockerWordBad = { fg = palette.orange },
 	DockerMenu = { fg = palette.green },
 	DockerMenuSelected = { fg = palette.bright, bg = "#0F2A0F", bold = true },
-	-- Sidebar (configs/sidebar.lua): cards with an edge and status in the agent states' colors, the
-	-- current card on fzf-lua's bg+.
-	SidebarName = { fg = palette.green },
-	SidebarNameCurrent = { fg = palette.bright, bold = true },
-	SidebarDetail = { fg = palette.dim },
-	SidebarCard = { bg = "#0F2A0F" },
-	SidebarCardInactive = { bg = "#0B1A0B" },
-	SidebarCursor = { fg = "#0F2A0F", bg = "#0F2A0F" },
-	SidebarOk = { fg = palette.green },
-	SidebarBusy = { fg = palette.purple },
-	SidebarBad = { fg = palette.orange },
-	SidebarOff = { fg = "#8C8C8C" },
+	-- Cards (configs/cards.lua) in their status's colors; the cursor takes the current one's background.
+	CardCursor = { fg = "#0F2A0F", bg = "#0F2A0F" },
+	CardMarked = { fg = palette.purple },
+	CardMarkedBg = { bg = "#15111D" },
 	-- Window separators match WezTerm's split lines and agent bar edges.
 	WinSeparator = { fg = "#223022" },
 }
 for group, spec in pairs(highlights) do
 	vim.api.nvim_set_hl(0, group, spec)
+end
+for kind, c in pairs({
+	Ok = { fg = palette.green, bright = palette.bright, dim = palette.dim, bg = "#0F2A0F", inactive = "#0B1A0B" },
+	Busy = { fg = palette.purple, bright = "#C0A8EC", dim = "#6A5A88", bg = "#201A2D", inactive = "#15111D" },
+	Bad = { fg = palette.orange, bright = "#F2AE78", dim = "#8E5F3A", bg = "#2A1C10", inactive = "#1C130B" },
+	Off = { fg = "#8C8C8C", bright = "#B4B4B4", dim = "#555555", bg = "#1C1C1C", inactive = "#121212" },
+}) do
+	vim.api.nvim_set_hl(0, "Card" .. kind, { fg = c.fg })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Current", { fg = c.bright, bold = true })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Detail", { fg = c.dim })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Bg", { bg = c.bg })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "BgInactive", { bg = c.inactive })
 end

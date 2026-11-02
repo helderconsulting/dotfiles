@@ -40,7 +40,7 @@ end
 
 -- Agent states as the sections' kinds, the most pressing first.
 local rank = { message = 5, waiting = 4, working = 3, done = 2, idle = 1 }
-M.kinds = { message = "bad", waiting = "bad", working = "busy", done = "ok", idle = "ok" }
+M.kinds = { message = "bad", waiting = "bad", working = "busy", done = "ok", idle = "ok", ready = "ok", approved = "ok" }
 
 function M.age(seconds)
 	seconds = os.time() - seconds

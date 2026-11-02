@@ -41,13 +41,19 @@ local function buffers()
 	return list
 end
 
+local function review()
+	local ok, mod = pcall(require, "configs.review")
+	return ok and vim.t.git_view_root and mod.summary(vim.t.git_view_root) or nil
+end
+
 local function status()
 	local counts = vim.diagnostic.count(0)
 	local s = vim.diagnostic.severity
 	local pos = vim.api.nvim_win_get_cursor(0)
 	return {
 		mode = modes[vim.api.nvim_get_mode().mode] or vim.api.nvim_get_mode().mode,
-		buffers = buffers(),
+		buffers = not vim.t.git_view and buffers() or {},
+		git = vim.t.git_view and vim.tbl_extend("force", vim.t.git_info or { branch = "" }, { review = review() }) or nil,
 		errors = counts[s.ERROR] or 0,
 		warnings = counts[s.WARN] or 0,
 		lsp = vim.lsp.status(),
@@ -88,7 +94,9 @@ vim.api.nvim_create_autocmd({
 	"CursorMoved",
 	"CursorMovedI",
 	"DirChanged",
+	"TabEnter",
 }, { group = group, callback = schedule_send })
+vim.api.nvim_create_autocmd("User", { group = group, pattern = { "GitInfo", "ReviewChanged" }, callback = schedule_send })
 vim.api.nvim_create_autocmd("VimLeavePre", {
 	group = group,
 	callback = function()

@@ -42,7 +42,7 @@ require("which-key").setup({
 	},
 	-- In the docker view only its own actions (configs/docker.lua), not the editor's.
 	filter = function(mapping)
-		return not vim.b.docker_view or (mapping.buffer or 0) ~= 0
+		return not (vim.b.docker_view or vim.g.sidebar) or (mapping.buffer or 0) ~= 0
 	end,
 	-- Its default triggers plus terminal mode, which only has prefixed mappings in the docker view's
 	-- terminals (configs/docker.lua): without it the 50ms timeoutlen ends a leader there before the

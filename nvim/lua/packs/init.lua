@@ -27,15 +27,25 @@ vim.api.nvim_create_autocmd("VimEnter", {
 	group = enter_group,
 	once = true,
 	callback = function()
-		require("packs.fzf")
-		require("packs.oil")
-		require("packs.mason")
-		require("packs.whichkey")
-		require("packs.dap")
-		require("packs.rustacean")
-		require("packs.git")
-		require("packs.neotest")
-		require("packs.paste")
+		local later = {}
+		if vim.g.sidebar then
+			require("packs.whichkey")
+		elseif vim.g.docker_view then
+			require("packs.whichkey")
+			later = { "packs.git" }
+		else
+			require("packs.fzf")
+			require("packs.oil")
+			require("packs.mason")
+			require("packs.whichkey")
+			require("packs.paste")
+			later = { "packs.git", "packs.dap", "packs.rustacean", "packs.neotest" }
+		end
+		vim.defer_fn(function()
+			for _, name in ipairs(later) do
+				require(name)
+			end
+		end, 20)
 	end,
 })
 

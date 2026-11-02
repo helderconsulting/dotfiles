@@ -49,6 +49,7 @@ local state = {
 	project = nil,
 	-- Content of the current tab: "logs" or "inspect" for containers and VMs.
 	mode = "logs",
+	marked = {},
 }
 
 local main_win, main_buf, menu_win, menu_buf, items_win, items_buf
@@ -188,6 +189,13 @@ local function current_entry()
 	end
 end
 
+local function marked_entries()
+	local marks = state.marked[section_name()] or {}
+	return vim.tbl_filter(function(e)
+		return marks[e.id]
+	end, state.entries[section_name()])
+end
+
 -- Bar entry ---------------------------------------------------------------------------------------
 
 local last_report
@@ -196,11 +204,12 @@ local function report()
 		return
 	end
 	local entry = current_entry()
+	local marked = #marked_entries()
 	local tabs = {
 		{
 			name = section_name() .. (entry and ("  " .. entry.name) or ""),
-			word = entry and entry.word or "empty",
-			kind = entry and entry.kind or "off",
+			word = marked > 0 and (marked .. " marked") or entry and entry.word or "empty",
+			kind = marked > 0 and "busy" or entry and entry.kind or "off",
 			current = true,
 		},
 	}
@@ -211,18 +220,10 @@ local function report()
 		tabs = tabs,
 		width = 2 * (menu_width() + 1),
 	}
-	-- A section with a state of its own (the VPN's) labels the bar with it on every tab, and the
-	-- current entry's status goes where the project would.
 	local section = lists[section_name()]
 	-- A section about a place of its own (the scripts' project) names it where the project would.
 	if section.place then
 		info.project = section.place()
-	end
-	if section.badge then
-		local word, kind = section.badge()
-		local entry = current_entry()
-		info.badge = { word = word, kind = kind }
-		info.project = entry and not entry.self and entry.word or ""
 	end
 	local payload = vim.json.encode(info)
 	if payload ~= last_report then
@@ -265,7 +266,7 @@ local function render_menu()
 	state.moving = true
 	cards.render(menu_buf, menu_win, ns, list, function(e)
 		return { e.name, section_detail(e.name), tostring(#state.entries[e.name]) }
-	end, state.section, nil, vim.api.nvim_get_current_win() == menu_win)
+	end, { selected = state.section, active = vim.api.nvim_get_current_win() == menu_win })
 	state.moving = false
 end
 
@@ -304,10 +305,16 @@ local function render_items()
 	if docker_down() then
 		cards.render(items_buf, items_win, ns, { { name = "docker engine", word = "down", kind = "bad" } }, function(e)
 			return { e.name, "brew services start colima", e.word }
-		end, nil, nil, active)
+		end, { active = active })
 	else
 		local _, index = current_entry()
-		cards.render(items_buf, items_win, ns, state.entries[section_name()], card, index, "no " .. section_name(), active)
+		cards.render(items_buf, items_win, ns, state.entries[section_name()], card, {
+			selected = index,
+			empty = "no " .. section_name(),
+			active = active,
+			multi = true,
+			marked = state.marked[section_name()],
+		})
 	end
 	state.moving = false
 end
@@ -699,6 +706,32 @@ local single = {
 	["<leader>i"] = true,
 }
 
+local function batchable(a)
+	return a[1]:match("^<leader>%a$") and not a.always and not a.single and not single[a[1]]
+end
+
+local function run_on(a, entries)
+	if #entries > 1 then
+		local names = vim.tbl_map(function(e)
+			return e.name
+		end, entries)
+		if vim.fn.confirm(a[3] .. ": " .. table.concat(names, ", ") .. "?", "&yes\n&no", 2) ~= 1 then
+			return
+		end
+		view.batch = true
+	end
+	for _, e in ipairs(entries) do
+		local ok, err = pcall(a[2], e, view)
+		if not ok then
+			vim.notify(tostring(err), vim.log.levels.ERROR)
+		end
+	end
+	view.batch = nil
+	if #entries > 1 then
+		vim.notify(a[3] .. ": " .. #entries .. " " .. section_name())
+	end
+end
+
 local find = {
 	"<leader>f",
 	function()
@@ -748,32 +781,13 @@ local find = {
 		local header = { "enter show", "tab mark", "ctrl-a all" }
 		for _, a in ipairs(actions[name] or {}) do
 			local key = a[1]:match("^<leader>(%a)$")
-			if key and not a.always and not a.single and not single[a[1]] then
+			if key and batchable(a) then
 				-- Just the verb ("resume or stop", "delete"), so every key fits on the line.
 				table.insert(header, "ctrl-" .. key .. " " .. (a[3]:match("^(%S+ or %S+)") or a[3]:match("^%S+")))
 				fzf_actions["ctrl-" .. key] = function(selected)
 					local entries = picked(selected)
-					if #entries == 0 or section_name() ~= name then
-						return
-					end
-					if #entries > 1 then
-						local names = vim.tbl_map(function(e)
-							return e.name
-						end, entries)
-						if vim.fn.confirm(a[3] .. ": " .. table.concat(names, ", ") .. "?", "&yes\n&no", 2) ~= 1 then
-							return
-						end
-						view.batch = true
-					end
-					for _, e in ipairs(entries) do
-						local ok, err = pcall(a[2], e, view)
-						if not ok then
-							vim.notify(tostring(err), vim.log.levels.ERROR)
-						end
-					end
-					view.batch = nil
-					if #entries > 1 then
-						vim.notify(a[3] .. ": " .. #entries .. " " .. name)
+					if #entries > 0 and section_name() == name then
+						run_on(a, entries)
 					end
 				end
 			end
@@ -831,6 +845,13 @@ function set_actions()
 		for _, buf in ipairs(buffers()) do
 			local modes = vim.list_contains(adopted, buf) and { "n", "t" } or "n"
 			vim.keymap.set(modes, a[1], function()
+				local marked = marked_entries()
+				if #marked > 0 and batchable(a) then
+					state.marked[section_name()] = nil
+					run_on(a, marked)
+					redraw()
+					return
+				end
 				local entry = current_entry()
 				if entry or a.always then
 					a[2](entry, view)
@@ -951,6 +972,7 @@ local function plain(win)
 end
 
 function M.open()
+	vim.g.docker_view = true
 	local first = vim.api.nvim_get_current_buf()
 	main_buf = scratch("docker://content")
 	main_win = vim.api.nvim_get_current_win()
@@ -993,6 +1015,33 @@ function M.open()
 	end, function()
 		hand_off("Right")
 	end)
+	local function toggle_mark(delta)
+		local entry = current_entry()
+		if not entry then
+			return
+		end
+		local marks = state.marked[section_name()] or {}
+		marks[entry.id] = not marks[entry.id] or nil
+		state.marked[section_name()] = marks
+		local list = state.entries[section_name()]
+		local _, index = current_entry()
+		local target = list[index + delta]
+		if target then
+			state.current[section_name()] = target.id
+			state.mode = "logs"
+		end
+		redraw()
+	end
+	vim.keymap.set("n", "<Tab>", function()
+		toggle_mark(1)
+	end, { buffer = items_buf, desc = "mark and next", nowait = true })
+	vim.keymap.set("n", "<S-Tab>", function()
+		toggle_mark(-1)
+	end, { buffer = items_buf, desc = "mark and previous", nowait = true })
+	vim.keymap.set("n", "<Esc>", function()
+		state.marked[section_name()] = nil
+		redraw()
+	end, { buffer = items_buf, desc = "clear marks", nowait = true })
 
 	local group = vim.api.nvim_create_augroup("DockerView", { clear = true })
 	vim.api.nvim_create_autocmd("CursorMoved", {
@@ -1030,13 +1079,13 @@ function M.open()
 		callback = function()
 			local win = vim.api.nvim_get_current_win()
 			local list = win == menu_win or win == items_win
-			vim.o.guicursor = list and "n-v-sm:block-SidebarCursor,i-c-ci-ve:ver25,r-cr-o:hor20" or default_cursor
+			vim.o.guicursor = list and "n-v-sm:block-CardCursor,i-c-ci-ve:ver25,r-cr-o:hor20" or default_cursor
 			render_menu()
 			render_items()
 		end,
 	})
 	vim.api.nvim_set_current_win(menu_win)
-	vim.o.guicursor = "n-v-sm:block-SidebarCursor,i-c-ci-ve:ver25,r-cr-o:hor20"
+	vim.o.guicursor = "n-v-sm:block-CardCursor,i-c-ci-ve:ver25,r-cr-o:hor20"
 	vim.api.nvim_create_autocmd("VimLeavePre", {
 		group = group,
 		callback = function()

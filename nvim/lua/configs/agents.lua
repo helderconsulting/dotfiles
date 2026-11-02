@@ -153,11 +153,67 @@ function M.enter(e)
 	end
 end
 
+local function resume(e)
+	if e.pane then
+		workspaces.request("pane", e.pane)
+	else
+		M.enter(e)
+	end
+end
+
+local function replace(target, session, view)
+	if view.confirm("replace " .. target.name .. " with " .. session.name .. "? " .. target.name .. " stays resumable") then
+		workspaces.request("replace", target.pane, session.session, session.cwd)
+	end
+end
+
 M.actions = {
 	{
-		"<leader>o",
-		M.enter,
-		"go to agent, or resume session in a workspace",
+		"<leader>s",
+		resume,
+		"resume session",
+	},
+	{
+		"<leader>a",
+		function(_, view)
+			workspaces.request("open", "claude", view.folder(), "here")
+		end,
+		"new session",
+		always = true,
+	},
+	{
+		"<leader>r",
+		function(e, view)
+			local running = vim.tbl_filter(function(x)
+				return x.pane ~= nil
+			end, view.entries())
+			local earlier = vim.tbl_filter(function(x)
+				return not x.pane and x.cwd and vim.fn.isdirectory(x.cwd) == 1
+			end, view.entries())
+			local function name(x)
+				return x.name
+			end
+			if e.pane then
+				vim.ui.select(earlier, { prompt = "replace " .. e.name .. " with", format_item = name }, function(choice)
+					if choice then
+						replace(e, choice, view)
+					end
+				end)
+			elseif not (e.cwd and vim.fn.isdirectory(e.cwd) == 1) then
+				vim.notify("can't resume " .. e.name, vim.log.levels.WARN)
+			elseif #running == 0 then
+				vim.notify("no running session to replace", vim.log.levels.WARN)
+			elseif #running == 1 then
+				replace(running[1], e, view)
+			else
+				vim.ui.select(running, { prompt = "replace which session with " .. e.name, format_item = name }, function(choice)
+					if choice then
+						replace(choice, e, view)
+					end
+				end)
+			end
+		end,
+		"replace a session",
 		single = true,
 	},
 	{
@@ -180,27 +236,7 @@ M.actions = {
 			end)
 		end,
 		"rename session",
-	},
-	{
-		"<leader>y",
-		function(e)
-			if e.session then
-				vim.fn.setreg("+", "claude --resume " .. e.session)
-				vim.notify("copied claude --resume " .. e.session)
-			end
-		end,
-		"copy resume command",
-	},
-	{
-		"<leader>s",
-		function(e, view)
-			if not e.pane then
-				M.enter(e)
-			elseif view.confirm("stop " .. e.name .. "? it stays resumable") then
-				view.run({ "wezterm", "cli", "kill-pane", "--pane-id", tostring(e.pane) })
-			end
-		end,
-		"resume or stop session",
+		single = true,
 	},
 	{
 		"<leader>d",

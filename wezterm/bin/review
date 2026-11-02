@@ -1,0 +1,58 @@
+#!/bin/sh
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
+usage() {
+	cat <<'EOF' >&2
+usage: review [-C dir] list                    open review comments in this worktree
+       review [-C dir] resolve <id> [reply]    mark a comment handled, with a short note on what changed
+       review [-C dir] ready [summary]         mark this worktree ready for review
+EOF
+	exit 2
+}
+
+if [ "$1" = -C ]; then
+	cd "$2" || exit 1
+	shift 2
+fi
+
+root=$(git rev-parse --show-toplevel 2>/dev/null) || {
+	echo "review: not in a git repository" >&2
+	exit 1
+}
+dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status/review"
+file="$dir/$(printf '%s' "$root" | tr / %).json"
+mkdir -p "$dir"
+[ -s "$file" ] || printf '{"comments":[]}\n' >"$file"
+
+update() {
+	jq "$@" "$file" >"$file.$$" && mv "$file.$$" "$file"
+	wezterm cli set-window-title "agents $$" >/dev/null 2>&1
+}
+
+log() {
+	jq -nc --arg root "$root" --argjson at "$(date +%s)" "$@" >>"${dir%/review}/threads.jsonl"
+}
+
+case $1 in
+list)
+	jq -r '.comments[] | select(.status == "sent")
+		| "\(.id)\t\(.path):\(.line1)\(if .line2 != .line1 then "-\(.line2)" else "" end)\t\(.text | gsub("\n"; " "))"' "$file"
+	;;
+resolve)
+	[ -n "$2" ] || usage
+	jq -e --arg id "$2" 'any(.comments[]; .id == $id)' "$file" >/dev/null || {
+		echo "review: no comment $2 (see: review list)" >&2
+		exit 1
+	}
+	update --arg id "$2" --arg reply "$3" --argjson at "$(date +%s)" \
+		'.comments |= map(if .id == $id then .status = "resolved" | .reply = $reply | .resolved_at = $at else . end)'
+	jq -c --arg id "$2" '.comments[] | select(.id == $id)' "$file" | head -1 | log --arg reply "$3" \
+		'input as $c | {type: "review", event: "resolved", root: $root, at: $at, id: $c.id, path: $c.path,
+			line1: $c.line1, line2: $c.line2, text: $c.text, reply: $reply}'
+	;;
+ready)
+	update --arg note "$2" --argjson at "$(date +%s)" '.ready = { note: $note, at: $at } | del(.approved)'
+	log --arg note "$2" '{type: "review", event: "ready", root: $root, at: $at, note: $note}'
+	;;
+*) usage ;;
+esac

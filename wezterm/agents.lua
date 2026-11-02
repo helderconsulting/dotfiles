@@ -55,8 +55,40 @@ local function editor_info(pane)
 			table.insert(parts, { text = " ●", dim = not buf.current })
 		end
 	end
-	local function detail(text)
-		table.insert(details, { text = (#details > 0 and "  " or "") .. text })
+	local function detail(text, fg)
+		table.insert(details, { text = (#details > 0 and "  " or "") .. text, fg = fg })
+	end
+	local git = type(status.git) == "table" and status.git
+	if git then
+		parts = { { text = git.branch ~= "" and git.branch or "loading" } }
+		if (git.ahead or 0) > 0 then
+			detail(git.ahead .. " ahead of " .. (git.base or "base"))
+		end
+		if (git.behind or 0) > 0 then
+			detail(git.behind .. " behind")
+		end
+		if (git.files or 0) > 0 then
+			detail(git.files .. " files +" .. (git.added or 0) .. " −" .. (git.removed or 0))
+		end
+		if (git.uncommitted or 0) > 0 then
+			detail(git.uncommitted .. " uncommitted")
+		end
+		local review = type(git.review) == "table" and git.review or {}
+		if review.ready then
+			detail("ready for review", schemes.green.fg)
+		elseif review.approved then
+			detail("approved", schemes.green.dim)
+		end
+		if (review.draft or 0) > 0 then
+			detail("reviewing " .. review.draft, schemes.purple.fg)
+		end
+		if (review.sent or 0) > 0 then
+			detail("sent " .. review.sent, schemes.orange.fg)
+		end
+		if (review.resolved or 0) > 0 then
+			detail("resolved " .. review.resolved, schemes.green.dim)
+		end
+		return { editor = true, mode = status.mode or "nvim", parts = parts, details = details, branch = "", worktree = "" }
 	end
 	if (status.errors or 0) > 0 then
 		detail("e" .. status.errors)
@@ -146,6 +178,7 @@ local function sidebar_info(pane)
 	end
 	return {
 		sidebar = true,
+		split_at = tonumber(view.split),
 		badge = { label = "", scheme = schemes.green },
 		tabs = tabs,
 		split = true,
@@ -159,9 +192,7 @@ end
 -- project its containers come from in the docker_view user var: one tab, its section with the
 -- count, over the view's lists (its entries are cards in the pane). The tabs are push_tabs', each
 -- with its word in its kind's color, like an agent's state: green ok, purple getting there, orange
--- needs a look, grey stopped or unused. The vpn devices section leads with this Mac's VPN state:
--- green connected, purple connecting, grey stopped, orange waiting on a login. A down engine is one
--- tab saying so.
+-- needs a look, grey stopped or unused. A down engine is one tab saying so.
 -- Grey only here: the idle green reads too much like the running one next to it.
 local grey = { fg = "#8C8C8C", dim = "#555555", bg = "#121212", focus = "#1C1C1C" }
 local docker_schemes = { ok = schemes.green, busy = schemes.purple, bad = schemes.orange, off = grey }
@@ -187,8 +218,6 @@ local function docker_info(pane)
 	elseif #tabs == 0 then
 		tabs = { { name = "no " .. (view.section or "containers"), info = "", scheme = grey, current = true } }
 	end
-	local lead = type(view.badge) == "table"
-		and { text = view.badge.word or "", scheme = docker_schemes[view.badge.kind] or grey }
 	return {
 		docker = true,
 		-- The view's menu width plus its split line, so the entry sits right under the menu. Not
@@ -197,7 +226,6 @@ local function docker_info(pane)
 		badge = { label = "", scheme = grey },
 		tabs = tabs,
 		split = true,
-		lead = lead or nil,
 		parts = {},
 		worktree = view.project or "",
 		branch = "",
@@ -224,11 +252,48 @@ local function agent_info(pane)
 	-- A received message shows until the reply is done (bin/agent-message); a permission prompt
 	-- during the reply still shows as waiting.
 	if state ~= "waiting" then
-		local marker = io.open(state_dir .. "/" .. id .. ".message")
+		local path = state_dir .. "/" .. id .. ".message"
+		local marker = io.open(path)
 		if marker then
+			local sent = tonumber(marker:read("*l") or "") or 0
 			marker:close()
-			state = "message"
+			if glyph == "✳" and os.time() - sent > 5 then
+				os.remove(path)
+			else
+				state = "message"
+			end
 		end
+	end
+	local review = {}
+	if fields[3] and fields[3] ~= "" then
+		local f = io.open(state_dir .. "/review/" .. (fields[3]:gsub("/", "%%")) .. ".json")
+		if f then
+			local ok, data = pcall(wezterm.serde.json_decode, f:read("*a") or "")
+			f:close()
+			review = ok and type(data) == "table" and data or {}
+		end
+	end
+	if state == "idle" or state == "done" then
+		if type(review.ready) == "table" then
+			state = "ready"
+		elseif type(review.approved) == "table" then
+			state = "approved"
+		end
+	end
+	local open, resolved = 0, 0
+	for _, c in ipairs(type(review.comments) == "table" and review.comments or {}) do
+		if c.status == "sent" then
+			open = open + 1
+		elseif c.status == "resolved" then
+			resolved = resolved + 1
+		end
+	end
+	local details = {}
+	if open > 0 then
+		table.insert(details, { text = open .. " open", fg = schemes.orange.fg })
+	end
+	if resolved > 0 then
+		table.insert(details, { text = (#details > 0 and "  " or "") .. resolved .. " resolved", fg = schemes.green.dim })
 	end
 	-- Ignore a stale file left behind when the agent exited without a SessionEnd hook.
 	if not foreground_process(pane):find(agent, 1, true) then
@@ -247,6 +312,7 @@ local function agent_info(pane)
 		state = state,
 		title = title,
 		parts = { { text = title } },
+		details = details,
 		root = fields[3] or "",
 		branch = fields[4] or "",
 		worktree = fields[5] or "",
@@ -260,6 +326,8 @@ local badges = {
 	done = { label = "done", scheme = schemes.green },
 	idle = { label = "idle", scheme = schemes.idle },
 	message = { label = "message", scheme = schemes.red },
+	ready = { label = "ready", scheme = schemes.green },
+	approved = { label = "approved", scheme = schemes.idle },
 }
 
 local function badge(state, pane_id, is_active)
@@ -299,8 +367,9 @@ local function push_entry(items, b, e, focused, width, number)
 	end
 	local edge, label = "▎ ", " " .. b.label .. " "
 	local num = number and (number .. " ") or ""
-	local place = wezterm.truncate_right(e.worktree ~= "" and e.worktree or e.branch or "", 16)
-	local details = e.details or {}
+	local place = e.compact and "" or wezterm.truncate_right(e.worktree ~= "" and e.worktree or e.branch or "", 16)
+	local details = not e.compact and e.details or {}
+	local shown_parts = e.compact and {} or e.parts
 	local function fixed()
 		local w = wezterm.column_width(edge) + wezterm.column_width(num) + wezterm.column_width(label) + 1 + 2
 		if #details > 0 then
@@ -308,7 +377,7 @@ local function push_entry(items, b, e, focused, width, number)
 		end
 		return place ~= "" and w + 5 + wezterm.column_width(place) or w
 	end
-	local main_width = math.min(parts_width(e.parts), (e.editor or e.docker) and 80 or 28)
+	local main_width = math.min(parts_width(shown_parts), (e.editor or e.docker) and 80 or 28)
 	if width then
 		if place ~= "" and width - fixed() < 12 then
 			place = ""
@@ -325,7 +394,7 @@ local function push_entry(items, b, e, focused, width, number)
 	seg(c.fg, bg, label)
 	table.insert(items, "ResetAttributes")
 	seg(bg, bg, " ")
-	local parts = e.parts
+	local parts = shown_parts
 	if e.current_tab then
 		local start, used = 1, 0
 		for _, part in ipairs(parts) do
@@ -362,7 +431,7 @@ local function push_entry(items, b, e, focused, width, number)
 	if #details > 0 then
 		seg(bg, bg, "  ")
 		for _, part in ipairs(details) do
-			seg(c.dim, bg, part.text)
+			seg(part.fg or c.dim, bg, part.text)
 		end
 	end
 	if place ~= "" then
@@ -382,17 +451,6 @@ local function push_tabs(items, e, focused, width, number)
 	local num = number and (number .. "  ") or ""
 	local left = width or math.huge
 
-	if e.lead then
-		local c = e.lead.scheme
-		local bg = focused and c.focus or c.bg
-		local text = wezterm.truncate_right(num .. e.lead.text .. "  ", math.max(left - 2, 0))
-		seg(focused and c.fg or c.dim, bg, "▎ ")
-		table.insert(items, { Attribute = { Intensity = "Bold" } })
-		seg(c.fg, bg, text)
-		table.insert(items, "ResetAttributes")
-		left, num = left - 2 - cw(text), ""
-	end
-
 	local tabs, current = e.tabs, 1
 	for i, t in ipairs(tabs) do
 		current = t.current and i or current
@@ -410,6 +468,9 @@ local function push_tabs(items, e, focused, width, number)
 			widths[i] = i < #tabs and share or avail - share * (#tabs - 1)
 		end
 		widths[1] = widths[1] + cw(num)
+		if e.split_at and #tabs == 2 and e.split_at < left then
+			widths[1], widths[2] = e.split_at, left - e.split_at
+		end
 	else
 		for i = 1, #tabs do
 			widths[i] = natural(i)
@@ -524,7 +585,7 @@ end
 -- sized so a bar cell is exactly a pane cell: panes round JetBrains Mono's 21.6 px advance (18pt,
 -- 144 dpi) up to 22 px, so the bar uses 18 * 22 / 21.6. Each entry starts on the split line at
 -- its left. Side-by-side panes are columns of the layout; panes stacked in one column share its
--- width, and a column without agents stays empty. Agents in other tabs follow at natural width.
+-- width, and a column without agents stays empty. Agents in other tabs only get a number.
 local font_size = 18
 local bar_font_size = font_size * 22 / 21.6
 
@@ -545,7 +606,7 @@ local function bar_items(window, entries)
 		if e.tabs then
 			push_tabs(scratch, e, false, nil, 1)
 		else
-			push_entry(scratch, e.badge, e, false, nil, 1)
+			push_entry(scratch, e.badge or e.mode and mode_badge(e.mode) or badge(e.state, e.pane:pane_id(), false), e, false, nil, 1)
 		end
 		for _, item in ipairs(scratch) do
 			if type(item) == "table" and item.Text then
@@ -571,6 +632,7 @@ local function bar_items(window, entries)
 	for _, e in ipairs(entries) do
 		if e.active_tab then
 			table.insert(by_left[e.left].entries, e)
+			e.compact = e.agent ~= nil
 		end
 	end
 	for i, col in ipairs(columns) do
@@ -604,7 +666,7 @@ local function bar_items(window, entries)
 
 	for _, e in ipairs(entries) do
 		if not e.active_tab then
-			entry(e)
+			table.insert(order, e.pane:pane_id())
 		end
 	end
 	return items, order
@@ -734,6 +796,14 @@ local function record_focus(agents)
 	wezterm.time.call_after(0.3, function()
 		if pending_focus ~= focus or focus == last_focus then
 			return
+		end
+		local marker = io.open(state_dir .. "/balancing")
+		if marker then
+			local at = tonumber(marker:read("*l") or "") or 0
+			marker:close()
+			if os.time() - at <= 2 then
+				return
+			end
 		end
 		write_focus(focus)
 	end)
@@ -877,11 +947,86 @@ function M.apply(config)
 		end
 	end
 
+	local spawned = {}
+	local moving
+	local max_agents = 4
+	local function agent_panes(tab, t)
+		local live, list = {}, {}
+		for _, a in ipairs(t.agents) do
+			live[a.pane:pane_id()] = true
+		end
+		for _, p in ipairs(tab:panes_with_info()) do
+			if live[p.pane:pane_id()] or spawned[p.pane:pane_id()] then
+				table.insert(list, p)
+			end
+		end
+		return list
+	end
+	local function add_agent(tab, t, cwd, args)
+		local columns = {}
+		for _, p in ipairs(agent_panes(tab, t)) do
+			local col
+			for _, c in ipairs(columns) do
+				col = c.left == p.left and c or col
+			end
+			if not col then
+				col = { left = p.left }
+				table.insert(columns, col)
+			end
+			table.insert(col, p)
+		end
+		table.sort(columns, function(x, y)
+			return x.left < y.left
+		end)
+		local last = columns[#columns]
+		local new
+		if not last then
+			return nil
+		end
+		table.sort(last, function(x, y)
+			return x.top < y.top
+		end)
+		if #last == 2 then
+			local top, bottom = last[1].pane, last[2].pane
+			bottom:move_to_new_tab()
+			new = top:split({ direction = "Right", cwd = cwd, args = args })
+			spawned[new:pane_id()] = true
+			moving = { pane = bottom, tab_id = tab:tab_id(), deadline = os.time() + 3 }
+			wezterm.run_child_process({
+				cli,
+				"cli",
+				"split-pane",
+				"--pane-id",
+				tostring(top:pane_id()),
+				"--bottom",
+				"--move-pane-id",
+				tostring(bottom:pane_id()),
+			})
+		else
+			new = last[#last].pane:split({ direction = "Bottom", cwd = cwd, args = args })
+		end
+		spawned[new:pane_id()] = true
+		return new
+	end
+
 	local function open(window, pane, cwd, mode, here)
+		if moving then
+			local tab = moving.pane:tab()
+			if not (tab and tab:tab_id() == moving.tab_id) and os.time() < moving.deadline then
+				wezterm.time.call_after(0.1, function()
+					open(window, pane, cwd, mode, here)
+				end)
+				return
+			end
+			moving = nil
+		end
 		local t = tab_parts(window:active_tab())
 		local agent = agent_command(mode)
 		local session = mode:match("^session:") ~= nil
 		here = here or (session and t.root == (cwd:gsub("/$", "")))
+		if here and agent and t.agent and #agent_panes(window:active_tab(), t) >= max_agents then
+			here = false
+		end
 		local app, focus, containers = nil, nil, t.containers
 		if t.shell then
 			if agent then
@@ -893,9 +1038,9 @@ function M.apply(config)
 			-- Neovim active.
 			t.shell:activate()
 			window:perform_action(wezterm.action.CloseCurrentPane({ confirm = false }), t.shell)
-		elseif here and session and t.agent then
+		elseif here and agent and t.agent then
 			app = t.editor or t.agent:split({ direction = "Right", cwd = cwd, args = run("nvim", cwd) })
-			focus = t.agents[#t.agents].pane:split({ direction = "Bottom", cwd = cwd, args = run(agent, cwd) })
+			focus = add_agent(window:active_tab(), t, cwd, run(agent, cwd))
 		elseif here and t.agent and not t.editor then
 			app = t.agent:split({ direction = "Right", cwd = cwd, args = run("nvim", cwd) })
 			focus = app
@@ -1183,6 +1328,15 @@ function M.apply(config)
 			if tab then
 				switch(mw, tab)
 				target:activate()
+			end
+		elseif kind == "replace" and args[3] and args[3] ~= "" then
+			local target = wezterm.mux.get_pane(tonumber(args[2]))
+			if target then
+				local cwd = args[4] ~= "" and args[4] or nil
+				local new = target:split({ direction = "Bottom", cwd = cwd, args = run("claude --resume " .. args[3], cwd) })
+				spawned[new:pane_id()] = true
+				new:activate()
+				wezterm.background_child_process({ cli, "cli", "kill-pane", "--pane-id", tostring(target:pane_id()) })
 			end
 		elseif kind == "open" and args[3] and args[3] ~= "" then
 			open(window, pane, args[3], args[2], args[4] == "here")
