@@ -273,10 +273,14 @@ local function agent_info(pane)
 			review = ok and type(data) == "table" and data or {}
 		end
 	end
+	local function own(mark)
+		local by = type(mark) == "table" and mark.session or ""
+		return by == "" or (fields[7] or "") == "" or by == fields[7]
+	end
 	if state == "idle" or state == "done" then
-		if type(review.ready) == "table" then
+		if type(review.ready) == "table" and own(review.ready) then
 			state = "ready"
-		elseif type(review.approved) == "table" then
+		elseif type(review.approved) == "table" and own(review.approved) then
 			state = "approved"
 		end
 	end

@@ -1,5 +1,5 @@
 vim.pack.add({
-	"https://github.com/Saghen/blink.cmp",
+	{ src = "https://github.com/Saghen/blink.cmp", version = vim.version.range("1.*") },
 })
 
 require("blink.cmp").setup({
@@ -50,13 +50,4 @@ require("blink.cmp").setup({
 		completion = { menu = { auto_show = true } },
 	},
 	fuzzy = { implementation = "prefer_rust_with_warning" },
-})
-
-vim.api.nvim_create_autocmd("PackChanged", {
-	callback = function(ev)
-		local name, kind = ev.data.spec.name, ev.data.kind
-		if name == "blink.cmp" and (kind == "install" or kind == "update") then
-			vim.system({ "cargo", "build", "--release" }, { cwd = ev.data.path }):wait()
-		end
-	end,
 })

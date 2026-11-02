@@ -14,7 +14,7 @@ require("conform").setup({
 		css = { "prettier", stop_after_first = true },
 		less = { "prettier", stop_after_first = true },
 		html = { "prettier", stop_after_first = true },
-		go = { "gofumt" },
+		go = { "gofumpt" },
 		c = { "clang-format" },
 		sql = { "sql_formatter" },
 	},

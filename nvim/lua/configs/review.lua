@@ -308,7 +308,7 @@ local function persist(root, opts)
 		ready[real(root)], approved[real(root)] = nil, nil
 	end
 	if opts and opts.approve then
-		data.ready, data.approved = nil, { at = os.time() }
+		data.ready, data.approved = nil, { at = os.time(), session = opts.session }
 		ready[real(root)], approved[real(root)] = nil, data.approved
 	end
 	for _, c in ipairs(comments) do
@@ -802,12 +802,12 @@ local function agent_panes(root)
 	end
 	local panes = {}
 	for _, p in ipairs(vim.json.decode(out.stdout)) do
-		local agent, state, agent_root, branch
+		local agent, state, agent_root, branch, session
 		local f = io.open(state_dir .. "/" .. p.pane_id)
 		if f then
 			-- agent, state, root, branch, worktree, title (see wezterm/bin/agent-status)
 			local fields = vim.split(f:read("*l") or "", "\t")
-			agent, state, agent_root, branch = fields[1], fields[2], fields[3], fields[4]
+			agent, state, agent_root, branch, session = fields[1], fields[2], fields[3], fields[4], fields[7]
 			f:close()
 		end
 		-- Claude Code prefixes its title with ✳ when idle and a spinner while busy. That also covers
@@ -827,6 +827,7 @@ local function agent_panes(root)
 				state = state,
 				root = agent_root,
 				branch = branch or "",
+				session = session or "",
 				here = same_path(agent_root, root),
 				title = p.title:gsub("^[^%w]+", ""),
 			})
@@ -975,8 +976,8 @@ function M.approve()
 	watch(root)
 	pick_agent(root, "Approve " .. vim.fs.basename(root), function(p)
 		send_to(p.id, "Review approved: the changes on this branch are ready for a merge request.")
-		persist(root, { approve = true })
-		log_event({ event = "approved", root = real(root), agent = p.title })
+		persist(root, { approve = true, session = p.session })
+		log_event({ event = "approved", root = real(root), agent = p.title, session = p.session })
 		vim.notify(("review: approved %s, told %s (%s)"):format(vim.fs.basename(root), p.title, p.branch))
 	end)
 end

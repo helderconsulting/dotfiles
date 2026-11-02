@@ -1,3 +1,15 @@
+vim.api.nvim_create_autocmd("PackChanged", {
+	group = vim.api.nvim_create_augroup("PackHooks", { clear = true }),
+	callback = function(ev)
+		if ev.data.spec.name == "nvim-treesitter" and ev.data.kind == "update" then
+			if not ev.data.active then
+				vim.cmd.packadd("nvim-treesitter")
+			end
+			require("nvim-treesitter").update()
+		end
+	end,
+})
+
 require("packs.theme")
 
 local on_open_group = vim.api.nvim_create_augroup("OnOpen", { clear = true })
@@ -36,7 +48,7 @@ vim.api.nvim_create_autocmd("VimEnter", {
 		else
 			require("packs.fzf")
 			require("packs.oil")
-			require("packs.mason")
+			require("packs.mason").ensure_installed()
 			require("packs.whichkey")
 			require("packs.paste")
 			later = { "packs.git", "packs.dap", "packs.rustacean", "packs.neotest" }

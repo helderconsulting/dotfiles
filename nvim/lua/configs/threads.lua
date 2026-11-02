@@ -81,7 +81,8 @@ function M.items(filter)
 	for _, m in ipairs(M.messages()) do
 		if m.type == "review" then
 			local label = labels[m.event]
-			if label and ((root and real(m.root) == root) or (folder and inside(folder, m.root))) then
+			local other = filter.session and m.session and m.session ~= "" and m.session ~= filter.session
+			if label and not other and ((root and real(m.root) == root) or (folder and inside(folder, m.root))) then
 				local place = folder and (vim.fs.basename(m.root or "") .. "  ") or ""
 				local card
 				if m.path then

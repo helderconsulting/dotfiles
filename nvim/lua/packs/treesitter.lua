@@ -3,50 +3,9 @@ vim.pack.add({
 	"https://github.com/nvim-treesitter/nvim-treesitter-textobjects",
 })
 
-vim.api.nvim_create_autocmd("PackChanged", {
-	desc = "Handle nvim-treesitter updates",
-	group = vim.api.nvim_create_augroup("nvim-treesitter-pack-changed-update-handler", { clear = true }),
-	callback = function(event)
-		if event.data.kind == "update" then
-			local ok = pcall(vim.cmd, "TSUpdate")
-			if ok then
-				vim.notify("TSUpdate completed successfully!", vim.log.levels.INFO)
-			else
-				vim.notify("TSUpdate command not available yet, skipping", vim.log.levels.WARN)
-			end
-		end
-	end,
-})
 local ts = require("nvim-treesitter")
 -- https://github.com/nvim-treesitter/nvim-treesitter/blob/main/SUPPORTED_LANGUAGES.md
-ts.install({
-	"c",
-	"css",
-	"html",
-	"svelte",
-	"lua",
-	"luadoc",
-	"javascript",
-	"comment",
-	"query",
-	"vim",
-	"vimdoc",
-	"bash",
-	"typescript",
-	"tsx",
-	"json",
-	"rust",
-	"dockerfile",
-	"editorconfig",
-	"gitcommit",
-	"gitignore",
-	"git_config",
-	"git_rebase",
-	"http",
-	"go",
-	"markdown",
-	"sql",
-})
+ts.install(require("packs.tools").parsers)
 
 require("nvim-treesitter-textobjects").setup({
 	select = {
