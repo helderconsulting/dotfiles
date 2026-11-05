@@ -1,0 +1,4 @@
+#!/bin/sh
+[ "$AGENTD_SESSION" = 1 ] && exit 0
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+exec nvim --clean -l "$HOME/.config/lua/workspace/cli/main.lua" hook "$@"

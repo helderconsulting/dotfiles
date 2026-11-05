@@ -29,6 +29,20 @@ local function label(key)
 	return table.concat(words, " + ")
 end
 
+local conversation_keys = {
+	["add review comment"] = true,
+	["edit review comment"] = true,
+	["delete review comment"] = true,
+	["find review comments"] = true,
+	["send review to agent"] = true,
+}
+
+vim.keymap.set({ "n", "x" }, "<leader>", function()
+	if vim.fn.getchar(1) == 0 then
+		require("which-key").show({ keys = "<leader>" })
+	end
+end, { nowait = true, desc = "which-key-trigger leader" })
+
 require("which-key").setup({
 	icons = {
 		mappings = false,
@@ -40,9 +54,17 @@ require("which-key").setup({
 			end,
 		},
 	},
-	-- In the docker view only its own actions (configs/docker.lua), not the editor's.
+	-- In the docker view only its own actions (configs/docker.lua), not the editor's; in the
+	-- conversation view (configs/conversation.lua) its own and the review comment keys.
 	filter = function(mapping)
-		return not (vim.b.docker_view or vim.g.sidebar) or (mapping.buffer or 0) ~= 0
+		local role = require("configs.app").role
+		if role == "conversation" then
+			if vim.b.draft then
+				return (mapping.buffer or 0) ~= 0
+			end
+			return (mapping.buffer or 0) ~= 0 or conversation_keys[mapping.desc or ""] == true
+		end
+		return role == "editor" or (mapping.buffer or 0) ~= 0
 	end,
 	-- Its default triggers plus terminal mode, which only has prefixed mappings in the docker view's
 	-- terminals (configs/docker.lua): without it the 50ms timeoutlen ends a leader there before the

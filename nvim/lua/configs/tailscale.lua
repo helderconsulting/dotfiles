@@ -75,6 +75,7 @@ function M.fetch(done)
 					or backend[st.BackendState]
 					or { (st.BackendState or "unknown"):lower(), "busy" }
 				me.word, me.kind = mine[1], mine[2]
+				me.view_key = (st.BackendState or "") .. ":" .. (M.exit_node() or "")
 				table.insert(list, me)
 			end
 			for _, p in pairs(st.Peer or {}) do
@@ -82,7 +83,7 @@ function M.fetch(done)
 				if d.exit_node then
 					d.word, d.kind = "exit node", "ok"
 				elseif d.online then
-					d.word, d.kind = "online", "ok"
+					d.word, d.kind = "online", st.BackendState == "Running" and "ok" or "off"
 				else
 					d.word, d.kind = "offline", "off"
 				end
@@ -91,6 +92,14 @@ function M.fetch(done)
 			done(list)
 		end)
 	end)
+end
+
+function M.exit_node()
+	for _, p in pairs(status.Peer or {}) do
+		if p.ExitNode then
+			return short(p.DNSName, p.HostName)
+		end
+	end
 end
 
 -- The bar's label for the section: this Mac's VPN state, not the current device's.
@@ -184,11 +193,7 @@ function M.show(e, mode)
 	if e.self then
 		row("state", (status.BackendState or ""):lower())
 		row("tailnet", status.CurrentTailnet and status.CurrentTailnet.Name)
-		for _, p in pairs(status.Peer or {}) do
-			if p.ExitNode then
-				row("exit node", short(p.DNSName, p.HostName))
-			end
-		end
+		row("exit node", M.exit_node() or "none")
 		row("login", status.AuthURL)
 	end
 	row("dns", e.dns)
@@ -205,6 +210,77 @@ function M.show(e, mode)
 		table.insert(lines, " " .. warning)
 	end
 	return lines
+end
+
+local exit_colors = { ["in use"] = "#77DD77", online = "#A58BD3", offline = "#8C8C8C", none = "#E0955A" }
+
+function M.pick_exit_node(view)
+	local nodes = {}
+	for _, p in pairs(status.Peer or {}) do
+		if p.ExitNodeOption then
+			local d = device(p, false)
+			local where = type(p.Location) == "table"
+					and table.concat(vim.tbl_filter(function(s)
+						return s and s ~= ""
+					end, { p.Location.City, p.Location.Country }), ", ")
+				or nil
+			d.word = d.exit_node and "in use" or d.online and "online" or "offline"
+			d.detail = where or d.dns or ""
+			table.insert(nodes, d)
+		end
+	end
+	if #nodes == 0 then
+		return vim.notify("no device offers to be an exit node", vim.log.levels.WARN)
+	end
+	table.sort(nodes, function(a, b)
+		if not a.exit_node ~= not b.exit_node then
+			return a.exit_node == true
+		end
+		if not a.online ~= not b.online then
+			return a.online == true
+		end
+		return a.name < b.name
+	end)
+	local using = nodes[1].exit_node
+	require("packs.fzf")
+	local fzf = require("fzf-lua")
+	local utils = require("fzf-lua.utils")
+	local width = 4
+	for _, d in ipairs(nodes) do
+		width = math.max(width, vim.fn.strdisplaywidth(d.name))
+	end
+	local lines, by_line = {}, {}
+	local function add(word, name, detail, value)
+		local line = ("%s  %s  %s"):format(
+			utils.ansi_from_rgb(exit_colors[word], ("%-8s"):format(word)),
+			name .. string.rep(" ", width - vim.fn.strdisplaywidth(name)),
+			utils.ansi_from_rgb("#3F6F3F", detail)
+		)
+		table.insert(lines, line)
+		by_line[vim.trim(utils.strip_ansi_coloring(line))] = value
+	end
+	for _, d in ipairs(nodes) do
+		add(d.word, d.name, d.detail, d)
+	end
+	if using then
+		add("none", "none", "route traffic directly", false)
+	end
+	fzf.fzf_exec(lines, {
+		prompt = "exit node> ",
+		fzf_opts = { ["--ansi"] = true, ["--no-sort"] = true, ["--header"] = "enter use" },
+		actions = {
+			["enter"] = function(selected)
+				local d = selected and selected[1] and by_line[vim.trim(utils.strip_ansi_coloring(selected[1]))]
+				if d == nil then
+					return
+				elseif d == false then
+					view.run({ cli, "set", "--exit-node=" })
+				elseif not d.exit_node then
+					view.run({ cli, "set", "--exit-node=" .. (d.ips[1] or d.name) })
+				end
+			end,
+		},
+	})
 end
 
 M.actions = {
@@ -251,16 +327,11 @@ M.actions = {
 	},
 	{
 		"<leader>x",
-		function(e, view)
-			if e.exit_node then
-				view.run({ cli, "set", "--exit-node=" })
-			elseif e.exit_option then
-				view.run({ cli, "set", "--exit-node=" .. (e.ips[1] or e.name) })
-			else
-				vim.notify(e.name .. " doesn't offer to be an exit node", vim.log.levels.WARN)
-			end
+		function(_, view)
+			M.pick_exit_node(view)
 		end,
-		"use or stop exit node",
+		"pick exit node",
+		always = true,
 	},
 	{
 		"<leader>y",

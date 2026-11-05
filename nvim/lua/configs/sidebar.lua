@@ -1,69 +1,25 @@
--- The sidebar: a Neovim in a narrow pane on the left of a workspace tab (wezterm/agents.lua runs
--- nvim +Sidebar), listing the workspaces (configs/workspaces.lua) or the agents (configs/agents.lua)
--- as cards (configs/cards.lua), like a mailbox. The two sections are tabs in the pane's WezTerm bar entry, like the
--- docker view's entries: the sidebar user var carries them with their counts, which also tells
--- WezTerm this pane is the sidebar, not the workspace's editor. ALT left and right go through them,
--- and past the ends on to the next pane like the rest of the ALT arrow grid (configs/keymaps.lua).
--- j and k (or the arrows) move a card at a time, with a count like 5j, gg and G go to the first and
--- last card and 12G to the twelfth. Enter goes there (a running workspace or agent) or opens it (a
--- closed project, an earlier session), and each section's other actions sit under the leader, as
--- in the docker view, where which-key shows only the current section's.
-local workspaces = require("configs.workspaces")
-local agents = require("configs.agents")
+local app = require("configs.app")
 local cards = require("configs.cards")
-local threads = require("configs.threads")
-local layout = require("configs.layout")
-
-local state_dir = (vim.env.XDG_STATE_HOME or (vim.env.HOME .. "/.local/state")) .. "/agent-status"
-local narrow = 44
-local page = 10
+local agents = require("configs.agents")
+local transcripts = require("configs.transcripts")
+local drafts = require("configs.drafts")
+local runner = require("configs.runner")
+local Thread = app.models.Thread
 
 local M = {}
 
--- A card's three lines per section. The pane is narrow, so a folder shows its own name first and
--- where it sits below (ceuz/automator-1.0 and -2.0 would cut to the same text).
-local function parent(dir)
-	return dir and workspaces.short(vim.fs.dirname(dir)) or ""
-end
+local page = 10
 local sections = {
-	{
-		name = "agents",
-		list = agents,
-		multi = true,
-		card = function(e)
-			local word = e.word
-			local place = e.cwd and vim.fs.basename(e.cwd) or e.host
-			if e.pane then
-				local f = io.open(state_dir .. "/" .. e.pane)
-				local fields = f and vim.split(f:read("*l") or "", "\t") or {}
-				if f then
-					f:close()
-				end
-				if fields[3] and fields[3] ~= "" then
-					place = fields[5] ~= nil and fields[5] ~= "" and fields[5] or vim.fs.basename(fields[3])
-				end
-				local counts = threads.review_counts(fields[3])
-				if (counts.open or 0) > 0 then
-					word = word .. " · " .. counts.open .. " open"
-				end
-				if (counts.resolved or 0) > 0 then
-					word = word .. " · " .. counts.resolved .. " resolved"
-				end
-			end
-			return { e.name, place, word }
-		end,
-	},
-	{
-		name = "workspaces",
-		list = workspaces,
-		card = function(e)
-			return { vim.fs.basename(e.dir), parent(e.dir), e.word .. (e.here and " · here" or "") }
-		end,
-	},
+	{ name = "agents", list = agents, multi = true },
 }
-local state = { section = 1, entries = {}, current = {}, marked = {}, thread = {}, thread_current = nil, in_thread = false }
-local buf, win, side_buf, side_win
+local state = { section = 1, entries = {}, current = {}, marked = {}, thread = nil, thread_current = nil, in_thread = false, threads_shown = true }
+local buf, win
 local ns = vim.api.nvim_create_namespace("sidebar")
+local log = {}
+
+local function valid(w)
+	return w and vim.api.nvim_win_is_valid(w)
+end
 
 local function section()
 	return sections[state.section]
@@ -87,137 +43,136 @@ local function current_entry()
 	return i and entries()[i]
 end
 
--- Tell WezTerm (wezterm/agents.lua) the sections as tabs with their counts, the current one marked,
--- for the bar entry; only when that changed, and empty when Neovim leaves.
-local last_report
-local function report(value)
-	if vim.env.WEZTERM_PANE and value ~= last_report then
-		last_report = value
-		vim.api.nvim_ui_send(("\27]1337;SetUserVar=sidebar=%s\7"):format(vim.base64.encode(value)))
-	end
-end
-
-local function report_tabs()
-	local tabs = {}
-	for i, s in ipairs(sections) do
-		table.insert(tabs, { name = s.name, count = #(state.entries[s.name] or {}), current = i == state.section })
-	end
-	report(vim.json.encode({ tabs = tabs }))
-end
-
-local function thread_on()
-	local f = io.open(state_dir .. "/sidebar-thread")
-	local value = f and f:read("*l")
-	if f then
-		f:close()
-	end
-	return value ~= "off"
-end
-
-local function thread_filter(e)
-	if not e or section().name ~= "agents" then
-		return nil
-	end
-	local root = e.cwd
-	if e.pane then
-		local f = io.open(state_dir .. "/" .. e.pane)
-		local fields = f and vim.split(f:read("*l") or "", "\t") or {}
-		if f then
-			f:close()
-		end
-		root = fields[3] ~= nil and fields[3] ~= "" and fields[3] or root
-	end
-	return { session = e.session, pane = e.pane, root = root }
+local function thread_items()
+	return state.thread and state.thread.items or {}
 end
 
 local function thread_index()
-	for i, item in ipairs(state.thread) do
-		if item.id == state.thread_current then
-			return i
+	return state.thread and state.thread:index_of(state.thread_current) or (#thread_items() > 0 and 1 or nil)
+end
+
+local function build_thread(e)
+	if not (e and not e.todo and state.threads_shown and section().name == "agents") then
+		return nil
+	end
+	local names = {}
+	for _, a in ipairs(app.agents()) do
+		names[a.id] = a:display_name()
+	end
+	return Thread.new({
+		agent = e.agent,
+		id = e.id,
+		root = e.cwd,
+		now = app.now(),
+		log = log,
+		asks = vim.tbl_filter(function(a)
+			return not a:is_stale(app.now(), a.pid == nil or vim.uv.kill(a.pid, 0) == 0)
+		end, e.agent and e.agent:pending_asks() or {}),
+		transcript = transcripts.get(e.id),
+		draft = drafts.load({ agent = e.id }),
+		name_of = function(id, fallback)
+			return names[id] or fallback
+		end,
+	})
+end
+
+local function report_sections()
+	local tabs = {}
+	for i, s in ipairs(sections) do
+		local list = state.entries[s.name] or {}
+		table.insert(tabs, { name = s.name, count = s.list.count and s.list.count(list) or #list, current = i == state.section })
+	end
+	local text = vim.json.encode(tabs)
+	if text ~= state.reported then
+		state.reported = text
+		app.update_view(function(v)
+			v:report_sections(tabs, section().name)
+		end)
+	end
+end
+
+local function follow_selection()
+	local e = section().name == "agents" and current_entry() or nil
+	if not e or e.drafting then
+		return
+	end
+	if e.todo then
+		if app.view():show_todo(e.id) then
+			app.update_view(function(v)
+				return v:show_todo(e.id)
+			end)
 		end
+		return
 	end
-	return #state.thread > 0 and #state.thread or nil
-end
-
-local function split_lists()
-	if section().name ~= "agents" then
-		return entries(), {}
+	local item = state.in_thread and thread_items()[thread_index() or 0] or nil
+	local agent = { id = e.id, cwd = e.cwd, name = e.name }
+	if app.view():follow_item(agent, item) then
+		app.update_view(function(v)
+			return v:follow_item(agent, item)
+		end)
 	end
-	local running, earlier = {}, {}
-	for _, e in ipairs(entries()) do
-		table.insert(e.pane and running or earlier, e)
-	end
-	return running, earlier
 end
-
-local function valid(w)
-	return w and vim.api.nvim_win_is_valid(w)
-end
-
-local place_windows
 
 local function render()
-	report_tabs()
+	if not valid(win) then
+		return
+	end
+	report_sections()
 	state.moving = true
-	local running, earlier = split_lists()
 	local index = current_index()
-	local below = index and index > #running
-	local filter = state.thread_shown and thread_filter(current_entry())
-	state.thread = filter and threads.items(filter) or {}
-	if #state.thread == 0 then
+	local entry = current_entry()
+	state.thread = build_thread(entry)
+	local items = thread_items()
+	if #items == 0 then
 		state.in_thread = false
 	end
-	local from, to = math.max(1, #state.thread - 2), #state.thread
-	if state.in_thread then
-		to = #state.thread - math.floor((#state.thread - (thread_index() or #state.thread)) / page) * page
-		from = math.max(1, to - page + 1)
+	local latest = items[1] and items[1].id
+	local before = entry and state.latest and state.latest.agent == entry.id and state.latest.id or nil
+	state.latest = entry and { agent = entry.id, id = latest } or nil
+	if before and before ~= latest and state.in_thread and latest and (state.thread_current == nil or state.thread_current == before) then
+		state.thread_current = latest
+		vim.schedule(follow_selection)
 	end
-	local inline = #state.thread > 0 and {
-		items = state.thread,
+	local from, to = 1, math.min(3, #items)
+	if state.in_thread then
+		local selected = thread_index() or 1
+		from = state.thread and state.page_top and state.thread:index_of(state.page_top) or nil
+		if not from or selected < from or selected >= from + page then
+			from = math.floor((selected - 1) / page) * page + 1
+		end
+		to = math.min(#items, from + page - 1)
+		state.page_top = items[from] and items[from].id
+	end
+	local inline = state.in_thread and #items > 0 and {
+		items = items,
 		card = function(item)
 			return item.card
 		end,
-		selected = state.in_thread and thread_index() or nil,
-		active = state.in_thread,
+		selected = thread_index(),
+		active = true,
 		from = from,
 		to = to,
+		unread = state.thread and state.thread.unread or 0,
 	} or nil
+	local card = section().list.card
 	local function opts(selected, here)
-		return {
-			selected = selected,
-			multi = section().multi,
-			marked = state.marked[section().name],
-			active = not state.in_thread,
-			inline = here and inline or nil,
-			keep_visible = true,
-		}
+		return { selected = selected, multi = section().multi, marked = state.marked[section().name], active = not state.in_thread, inline = here and inline or nil, keep_visible = true }
 	end
-	local focused = state.in_thread and inline and current_entry()
-	local top = opts(not below and index or nil, not below)
-	top.title = valid(side_win) and "active" or nil
-	if focused and not below then
+	local focused = inline and current_entry()
+	local top = opts(index, true)
+	top.empty = section().list.empty or "nothing here"
+	if focused then
 		top.selected, top.frozen = 1, true
 	end
-	cards.render(buf, win, ns, (focused and not below) and { focused } or running, section().card, top)
-	if valid(side_win) then
-		local o = opts(below and index - #running or nil, below)
-		o.title = "inactive"
-		o.empty = "no inactive sessions"
-		if focused and below then
-			o.selected, o.frozen = 1, true
-		end
-		cards.render(side_buf, side_win, ns, (focused and below) and { focused } or earlier, section().card, o)
-	end
-	local current = vim.api.nvim_get_current_win()
-	local want = below and valid(side_win) and side_win or win
-	if (current == win or current == side_win) and current ~= want then
-		vim.api.nvim_set_current_win(want)
-	end
+	cards.render(buf, win, ns, focused and { focused } or entries(), card, top)
 	state.moving = false
 end
 
--- Natural order like the docker view: the entries a section puts first, then by name with numbers
--- compared as numbers.
+local function moved()
+	render()
+	follow_selection()
+end
+
 local function natural(name)
 	return (name or ""):lower():gsub("%d+", function(n)
 		return ("%012d"):format(tonumber(n))
@@ -226,7 +181,7 @@ end
 
 local function refresh()
 	for _, s in ipairs(sections) do
-		s.list.fetch(function(list)
+		s.list.fetch(state.folder, function(list)
 			table.sort(list, function(a, b)
 				if (a.order or 1) ~= (b.order or 1) then
 					return (a.order or 1) < (b.order or 1)
@@ -234,13 +189,10 @@ local function refresh()
 				return natural(a.name) < natural(b.name)
 			end)
 			state.entries[s.name] = list
-			place_windows()
 			render()
-		end, { folder = state.folder })
+		end)
 	end
 end
-
--- Moving ---------------------------------------------------------------------------------------
 
 local function select(index)
 	local list = entries()
@@ -253,157 +205,28 @@ local function select(index)
 	end
 	state.current[section().name] = list[index].id
 	state.in_thread = false
-	render()
-end
-
-local function step(delta)
-	select((current_index() or 1) + delta * vim.v.count1)
-end
-
-local function go(first)
-	select(vim.v.count > 0 and vim.v.count or first and 1 or #entries())
-end
-
-local set_actions
-
--- Past the ends hand the move to WezTerm, like the docker view; the clock makes every request a
--- change for WezTerm's user-var-changed event.
-local function hand_off(direction)
-	if vim.env.WEZTERM_PANE then
-		local value = vim.base64.encode(direction .. ":" .. vim.uv.hrtime())
-		vim.api.nvim_ui_send(("\27]1337;SetUserVar=nav=%s\7"):format(value))
-	end
+	moved()
 end
 
 local function step_thread(delta)
-	local list = state.thread
-	local index = (thread_index() or 0) + delta * vim.v.count1
-	local item = list[math.max(1, math.min(#list, index))]
+	local items = thread_items()
+	local item = items[math.max(1, math.min(#items, (thread_index() or 0) + delta * vim.v.count1))]
 	if item then
 		state.thread_current = item.id
-		render()
+		moved()
 	end
 end
 
 local function go_thread(first)
-	local list = state.thread
-	local item = list[vim.v.count > 0 and math.min(vim.v.count, #list) or first and 1 or #list]
+	local items = thread_items()
+	local item = items[vim.v.count > 0 and math.min(vim.v.count, #items) or first and 1 or #items]
 	if item then
 		state.thread_current = item.id
-		render()
+		moved()
 	end
 end
 
-local function open_thread_item()
-	local item = state.thread[thread_index() or 0]
-	if not item then
-		return
-	end
-	if item.comment then
-		threads.show_comment(item.comment.root, item.comment.id)
-	elseif item.pane then
-		workspaces.request("pane", item.pane)
-	else
-		local e = current_entry()
-		if e and e.pane then
-			workspaces.request("pane", e.pane)
-		end
-	end
-end
-
-function place_windows()
-	if not (valid(side_win) and valid(win)) then
-		return
-	end
-	local total = vim.api.nvim_win_get_height(win) + vim.api.nvim_win_get_height(side_win)
-	vim.api.nvim_win_set_height(side_win, total - math.floor(total / 2))
-end
-
-local function show_earlier(on)
-	if on and not valid(side_win) then
-		local current = vim.api.nvim_get_current_win()
-		vim.api.nvim_set_current_win(win)
-		state.moving = true
-		vim.cmd("rightbelow split")
-		side_win = vim.api.nvim_get_current_win()
-		vim.api.nvim_win_set_buf(side_win, side_buf)
-		for option, value in pairs({
-			number = false,
-			relativenumber = false,
-			signcolumn = "no",
-			foldcolumn = "0",
-			statuscolumn = "",
-			cursorline = false,
-			list = false,
-			spell = false,
-			wrap = false,
-			scrolloff = 0,
-			winfixheight = true,
-		}) do
-			vim.wo[side_win][option] = value
-		end
-		vim.wo[win].statusline = " "
-		vim.wo[win].winhighlight = "StatusLine:CardOffDetail,StatusLineNC:CardOffDetail"
-		vim.api.nvim_set_current_win(valid(current) and current or win)
-		state.moving = false
-	elseif not on and valid(side_win) then
-		state.moving = true
-		vim.api.nvim_win_close(side_win, true)
-		side_win = nil
-		state.moving = false
-	end
-	place_windows()
-end
-
-local function toggle_thread()
-	state.thread_shown = not state.thread_shown
-	state.in_thread = false
-	local f = io.open(state_dir .. "/sidebar-thread", "w")
-	if f then
-		f:write(state.thread_shown and "on" or "off", "\n")
-		f:close()
-	end
-	render()
-end
-
-local function switch(delta, direction)
-	if not sections[state.section + delta] then
-		return hand_off(direction)
-	end
-	state.section = state.section + delta
-	state.in_thread = false
-	set_actions()
-	show_earlier(section().name == "agents")
-	render()
-end
-
--- Actions --------------------------------------------------------------------------------------
-
--- What the sections' actions get besides their entry, like the docker view's.
 local view = {}
-
-function view.run(cmd, opts)
-	opts = opts or {}
-	vim.system(cmd, { text = true, env = opts.env }, function(res)
-		vim.schedule(function()
-			if opts.done then
-				opts.done(res)
-			end
-			if res.code ~= 0 then
-				vim.notify(vim.trim(res.stderr ~= "" and res.stderr or res.stdout), vim.log.levels.ERROR)
-			end
-			refresh()
-		end)
-	end)
-end
-
-function view.entries()
-	return entries()
-end
-
-function view.balance()
-	layout.balance(narrow)
-end
 
 function view.folder()
 	return state.folder
@@ -417,69 +240,67 @@ function view.confirm(question)
 	return view.batch or vim.fn.confirm(question, "&yes\n&no", 2) == 1
 end
 
-local function marked_entries()
-	local marks = state.marked[section().name] or {}
-	return vim.tbl_filter(function(e)
-		return marks[e.id]
-	end, entries())
-end
-
-local function run_on(a, list)
-	local names = vim.tbl_map(function(e)
-		return e.name
-	end, list)
-	if vim.fn.confirm(a[3] .. ": " .. table.concat(names, ", ") .. "?", "&yes\n&no", 2) ~= 1 then
-		return
-	end
-	view.batch = true
-	for _, e in ipairs(list) do
-		local ok, err = pcall(a[2], e, view)
-		if not ok then
-			vim.notify(tostring(err), vim.log.levels.ERROR)
-		end
-	end
-	view.batch = nil
-end
-
 local mapped = {}
 
-function set_actions()
-	for _, b in ipairs({ buf, side_buf }) do
-		for _, lhs in ipairs(mapped) do
-			pcall(vim.keymap.del, "n", lhs, { buffer = b })
-		end
+local function set_actions()
+	for _, lhs in ipairs(mapped) do
+		pcall(vim.keymap.del, "n", lhs, { buffer = buf })
 	end
 	mapped = {}
+	local groups = vim.tbl_map(function(g)
+		return { g[1], group = g[2], buffer = buf }
+	end, section().list.groups or {})
+	if #groups > 0 then
+		pcall(function()
+			require("which-key").add(groups)
+		end)
+	end
 	for _, a in ipairs(section().list.actions or {}) do
 		table.insert(mapped, a[1])
-		for _, b in ipairs({ buf, side_buf }) do
-			vim.keymap.set("n", a[1], function()
-				local marked = marked_entries()
-				if #marked > 0 and not a.single and not a.always then
-					state.marked[section().name] = nil
-					run_on(a, marked)
-					render()
-					return
+		vim.keymap.set("n", a[1], function()
+			local marks = state.marked[section().name] or {}
+			local marked = vim.tbl_filter(function(e)
+				return marks[e.id]
+			end, entries())
+			if #marked > 0 and not a.single and not a.always then
+				state.marked[section().name] = nil
+				local names = vim.tbl_map(function(e)
+					return e.name
+				end, marked)
+				if vim.fn.confirm(a[3] .. ": " .. table.concat(names, ", ") .. "?", "&yes\n&no", 2) == 1 then
+					view.batch = true
+					for _, e in ipairs(marked) do
+						pcall(a[2], e, view)
+					end
+					view.batch = nil
 				end
-				local e = current_entry()
-				if e or a.always then
-					a[2](e, view)
-				end
-			end, { buffer = b, desc = a[3], nowait = true })
-		end
+				return render()
+			end
+			local e = current_entry()
+			if e or a.always then
+				a[2](e, view)
+			end
+		end, { buffer = buf, desc = a[3], nowait = true })
 	end
-	-- which-key reads a buffer's mappings once; have it read them again.
 	local ok, wk_buf = pcall(require, "which-key.buf")
 	if ok and wk_buf.clear then
-		for _, b in ipairs({ buf, side_buf }) do
-			pcall(wk_buf.clear, { buf = b })
-		end
+		pcall(wk_buf.clear, { buf = buf })
 	end
 end
 
-local function leave_thread()
-	state.in_thread = false
-	render()
+local function edit_in_flight(item, e)
+	runner.interrupt(e.agent)
+	local transcript = transcripts.get(e.id)
+	local last = transcript and transcript:turn(transcript:count())
+	local text = item.text or (last and last.prompt) or ""
+	local file = drafts.file({ agent = e.id })
+	vim.fn.mkdir(vim.fs.dirname(file), "p")
+	local f = io.open(file, "w")
+	if f then
+		f:write(text)
+		f:close()
+	end
+	drafts.compose({ agent = e.id, cwd = e.cwd, name = e.name })
 end
 
 local function keymaps(b)
@@ -497,62 +318,76 @@ local function keymaps(b)
 	end
 	for _, lhs in ipairs({ "j", "<Down>" }) do
 		map(lhs, either(function()
-			step(1)
+			select((current_index() or 1) + vim.v.count1)
 		end, function()
 			step_thread(1)
 		end), "next card")
 	end
 	for _, lhs in ipairs({ "k", "<Up>" }) do
 		map(lhs, either(function()
-			step(-1)
+			select((current_index() or 1) - vim.v.count1)
 		end, function()
 			step_thread(-1)
 		end), "previous card")
 	end
 	map("gg", either(function()
-		go(true)
+		select(vim.v.count > 0 and vim.v.count or 1)
 	end, function()
 		go_thread(true)
 	end), "first card")
 	map("G", either(function()
-		go(false)
+		select(vim.v.count > 0 and vim.v.count or #entries())
 	end, function()
 		go_thread(false)
 	end), "last card")
 	map("<M-Left>", function()
-		switch(-1, "Left")
-	end, "previous section")
+		app.hand_off("Left")
+	end, "window on the left")
 	map("<M-Right>", function()
-		switch(1, "Right")
-	end, "next section")
+		app.hand_off("Right")
+	end, "window on the right")
 	map("<CR>", either(function()
 		local e = current_entry()
-		if e then
-			section().list.enter(e, view)
+		if not e then
+			return
 		end
-	end, open_thread_item), "go there, or open it")
+		local latest = state.thread and state.thread:latest_turn()
+		if latest then
+			state.in_thread, state.thread_current = true, latest.id
+		end
+		section().list.enter(e, view)
+		moved()
+	end, function()
+		app.focus("conversation")
+	end), "go there, or open it")
 	for _, lhs in ipairs({ "l", "<Right>" }) do
 		map(lhs, function()
-			if #state.thread > 0 and not state.in_thread then
-				state.in_thread = true
-				state.thread_current = state.thread[math.max(1, #state.thread - page + 1)].id
-				render()
+			local items = thread_items()
+			if #items > 0 and not state.in_thread then
+				state.in_thread, state.thread_current = true, items[1].id
+				moved()
 			end
 		end, "into the thread")
 	end
 	for _, lhs in ipairs({ "h", "<Left>" }) do
-		map(lhs, leave_thread, "out of the thread")
+		map(lhs, function()
+			state.in_thread = false
+			moved()
+		end, "out of the thread")
 	end
-	map("t", toggle_thread, "show or hide threads")
+	map("t", function()
+		state.threads_shown = not state.threads_shown
+		state.in_thread = false
+		render()
+	end, "show or hide threads")
 	local function toggle_mark(delta)
 		local e = current_entry()
-		if not (e and section().multi) then
-			return
+		if e and section().multi then
+			local marks = state.marked[section().name] or {}
+			marks[e.id] = not marks[e.id] or nil
+			state.marked[section().name] = marks
+			select((current_index() or 1) + delta)
 		end
-		local marks = state.marked[section().name] or {}
-		marks[e.id] = not marks[e.id] or nil
-		state.marked[section().name] = marks
-		select((current_index() or 1) + delta)
 	end
 	map("<Tab>", function()
 		toggle_mark(1)
@@ -561,153 +396,157 @@ local function keymaps(b)
 		toggle_mark(-1)
 	end, "mark and previous")
 	map("<Esc>", function()
+		local item = state.in_thread and thread_items()[thread_index() or 0]
+		local e = current_entry()
+		if item and item.outbox and e and e.agent then
+			return runner.send_now(e.agent, item.outbox)
+		elseif item and (item.working or item.pending) and e and e.agent then
+			return edit_in_flight(item, e)
+		end
 		state.marked[section().name] = nil
-		leave_thread()
-	end, "clear marks")
-	-- Oil's - (packs/oil.lua) has no folder to open here.
+		state.in_thread = false
+		render()
+	end, "clear marks, send a held message now, or interrupt the agent and edit a working or queued message")
 	map("-", "<nop>")
 end
 
-function M.open()
-	vim.g.sidebar = true
-	local start = vim.env.PWD or vim.fn.getcwd()
-	local git = vim.fs.find(".git", { path = start, upward = true })[1]
-	if git and vim.fn.isdirectory(git) == 0 then
-		local f = io.open(git)
-		local gitdir = f and f:read("*l") or ""
-		if f then
-			f:close()
-		end
-		state.folder = gitdir:match("^gitdir: (.+)/%.git/worktrees/[^/]+$") or vim.fs.dirname(git)
-	else
-		state.folder = git and vim.fs.dirname(git) or start
+local function follow_ask(view)
+	local ask = view.state == "ask" and view.ask
+	if not (ask and section().name == "agents" and state.current.agents == view.agent) then
+		return false
 	end
-	buf = vim.api.nvim_get_current_buf()
-	win = vim.api.nvim_get_current_win()
+	state.thread = build_thread(current_entry())
+	for _, item in ipairs(thread_items()) do
+		if item.ask == ask then
+			local changed = not (state.in_thread and state.thread_current == item.id)
+			state.in_thread, state.thread_current = true, item.id
+			return changed
+		end
+	end
+	return false
+end
+
+local function follow_view(change)
+	if change.id ~= app.workspace or not change.model or state.moving then
+		return
+	end
+	local focus = change.model:focus()
+	local switched = false
+	if focus and section().name == "agents" and state.current.agents ~= focus then
+		for _, e in ipairs(state.entries.agents or {}) do
+			if e.id == focus then
+				state.current.agents, state.in_thread, switched = focus, false, true
+				break
+			end
+		end
+	end
+	local drafting = change.model.state == "draft"
+	local draft_changed = drafting ~= state.drafting
+	state.drafting = drafting
+	local followed = follow_ask(change.model)
+	if draft_changed then
+		return refresh()
+	elseif followed or switched then
+		return render()
+	end
+end
+
+function M.open()
+	state.folder = app.folder()
+	win = app.main_window()
+	buf = vim.api.nvim_win_get_buf(win)
 	vim.api.nvim_buf_set_name(buf, "sidebar://")
 	vim.bo[buf].buftype = "nofile"
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].swapfile = false
 	vim.bo[buf].modifiable = false
-	for option, value in pairs({
-		number = false,
-		relativenumber = false,
-		signcolumn = "no",
-		foldcolumn = "0",
-		statuscolumn = "",
-		cursorline = false,
-		list = false,
-		spell = false,
-		wrap = false,
-		scrolloff = 0,
-	}) do
+	for option, value in pairs({ number = false, relativenumber = false, signcolumn = "no", foldcolumn = "0", statuscolumn = "", cursorline = false, list = false, spell = false, wrap = false, scrolloff = 0 }) do
 		vim.wo[win][option] = value
 	end
-	-- In normal mode the cursor takes the card's background, so it doesn't show where the terminal
-	-- honors cursor colors; typing (a rename, a prompt) keeps the usual one.
 	vim.o.guicursor = "n-v-sm:block-CardCursor,i-c-ci-ve:ver25,r-cr-o:hor20"
-	side_buf = vim.api.nvim_create_buf(false, true)
-	vim.api.nvim_buf_set_name(side_buf, "sidebar://earlier")
-	vim.bo[side_buf].modifiable = false
 	keymaps(buf)
-	keymaps(side_buf)
 	set_actions()
+	log = require("workspace.nvim").read_log(2000)
 
-	local function clicked(b, w)
-		local line = vim.api.nvim_win_get_cursor(w)[1]
-		local t = cards.inline_at(line, b)
-		if t and state.thread[t] then
-			state.in_thread = true
-			state.thread_current = state.thread[t].id
-			return render()
-		end
-		if state.in_thread then
-			return render()
-		end
-		local index = cards.index_at(line, b)
-		if index then
-			select(index + (b == side_buf and #split_lists() or 0))
-		else
-			render()
-		end
-	end
 	local group = vim.api.nvim_create_augroup("Sidebar", { clear = true })
-	-- A click on a card picks it.
-	for _, b in ipairs({ buf, side_buf }) do
-		vim.api.nvim_create_autocmd("CursorMoved", {
-			group = group,
-			buffer = b,
-			callback = function()
-				if not state.moving then
-					clicked(b, vim.api.nvim_get_current_win())
+	vim.api.nvim_create_autocmd("CursorMoved", {
+		group = group,
+		buffer = buf,
+		callback = function()
+			if state.moving then
+				return
+			end
+			local line = vim.api.nvim_win_get_cursor(0)[1]
+			local t = cards.inline_at(line, buf)
+			if t and thread_items()[t] then
+				local id = thread_items()[t].id
+				if state.in_thread and state.thread_current == id then
+					return
 				end
-			end,
-		})
-	end
-	vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = refresh })
-	local resize_timer = vim.uv.new_timer()
+				state.in_thread, state.thread_current = true, id
+				return moved()
+			end
+			local index = not state.in_thread and cards.index_at(line, buf)
+			if index then
+				if index == current_index() then
+					return
+				end
+				return select(index)
+			end
+			render()
+		end,
+	})
 	vim.api.nvim_create_autocmd("VimResized", {
 		group = group,
 		callback = function()
-			place_windows()
-			refresh()
-			resize_timer:start(400, 0, vim.schedule_wrap(function()
-				layout.balance(narrow)
-				place_windows()
-				render()
-			end))
+			render()
 		end,
 	})
-	vim.api.nvim_create_autocmd("WinEnter", { group = group, callback = function()
-		if not state.moving then
-			local current = vim.api.nvim_get_current_win()
-			if current == win or current == side_win then
-				clicked(current == win and buf or side_buf, current)
-			else
-				render()
-			end
-		end
-	end })
-	vim.api.nvim_create_autocmd("VimLeavePre", {
-		group = group,
-		callback = function()
-			report("")
-		end,
-	})
+	vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = refresh })
 
-	local focus_watcher, focus_timer = vim.uv.new_fs_event(), vim.uv.new_timer()
-	focus_watcher:start(state_dir, {}, function(_, filename)
-		if filename and vim.fs.basename(filename) == "focus" then
-			focus_timer:start(50, 0, vim.schedule_wrap(function()
-				local f = io.open(state_dir .. "/focus")
-				local pane = f and tonumber(((f:read("*l") or ""):match("^[^\t]*\t(%d+)")))
-				if f then
-					f:close()
-				end
-				for _, e in ipairs(state.entries.agents or {}) do
-					if pane and e.pane == pane and state.current.agents ~= e.id then
-						state.current.agents = e.id
-						state.thread_current = nil
-						state.in_thread = false
-						render()
-					end
-				end
-			end))
+	app.on("log", function(entry)
+		table.insert(log, entry)
+		render()
+	end)
+	app.on("agents", refresh)
+	app.on("runtimes", refresh)
+	app.on("todos", refresh)
+	app.on("usage", refresh)
+	app.on("reviews", render)
+	app.on("asks", function()
+		follow_ask(app.view())
+		render()
+	end)
+	app.on("transcripts", function(change)
+		if change.id == state.current.agents then
+			render()
 		end
 	end)
-	state.thread_shown = thread_on()
-	show_earlier(section().name == "agents")
-	if vim.o.columns ~= narrow then
-		vim.schedule(function()
-			layout.balance(narrow)
-			place_windows()
-			render()
-		end)
-	end
-	refresh()
-	vim.uv.new_timer():start(2000, 2000, vim.schedule_wrap(refresh))
-end
+	app.on("views", follow_view)
 
-vim.api.nvim_create_user_command("Sidebar", M.open, { desc = "workspaces and agents sidebar" })
+	refresh()
+	agents.watch_registry()
+	vim.uv.new_timer():start(5000, 5000, vim.schedule_wrap(function()
+		for _, e in ipairs(state.entries.agents or {}) do
+			if e.agent and e.agent:is_busy() then
+				return refresh()
+			end
+		end
+	end))
+	local anim_ns = vim.api.nvim_create_namespace("sidebar_working")
+	local frames = { "", " ·", " · ·", " · · ·" }
+	vim.uv.new_timer():start(500, 500, vim.schedule_wrap(function()
+		local frame = frames[math.floor(vim.uv.now() / 500) % #frames + 1]
+		if vim.api.nvim_buf_is_valid(buf) then
+			vim.api.nvim_buf_clear_namespace(buf, anim_ns, 0, -1)
+			for t, item in ipairs(thread_items()) do
+				local line = item.working and frame ~= "" and cards.inline_line(buf, t)
+				if line then
+					vim.api.nvim_buf_set_extmark(buf, anim_ns, line - 1, 0, { virt_text = { { frame, "CardBusy" } }, virt_text_pos = "eol", hl_mode = "combine" })
+				end
+			end
+		end
+	end))
+end
 
 return M

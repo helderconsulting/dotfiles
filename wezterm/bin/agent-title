@@ -1,21 +1,3 @@
 #!/bin/sh
 PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
-
-if [ $# -eq 0 ]; then
-	echo "usage: agent-title <title>    name this agent session in the WezTerm bar and sidebar" >&2
-	exit 2
-fi
-[ -n "$WEZTERM_PANE" ] || {
-	echo "agent-title: not running in a WezTerm pane" >&2
-	exit 1
-}
-
-file="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status/$WEZTERM_PANE"
-[ -f "$file" ] || {
-	echo "agent-title: no agent state for pane $WEZTERM_PANE" >&2
-	exit 1
-}
-
-T=$(printf '%s' "$*" | tr '\t\n' '  ') awk -F '\t' -v OFS='\t' '{ $6 = ENVIRON["T"]; print }' "$file" >"$file.$$" &&
-	mv "$file.$$" "$file"
-wezterm cli set-window-title "agents $$" >/dev/null 2>&1
+exec nvim --clean -l "$HOME/.config/lua/workspace/cli/main.lua" title "$@"

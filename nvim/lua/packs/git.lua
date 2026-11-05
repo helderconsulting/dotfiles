@@ -30,6 +30,7 @@ if ok_codediff then
 		-- Hunks run on into the next file and stop at the ends, so ALT up / down can step through all
 		-- changes and leave Neovim past the first or last one (configs/keymaps.lua).
 		diff = {
+			layout = require("workspace.models.workspace").diff_layout(vim.o.columns),
 			cycle_hunks_across_files = true,
 			cycle_next_hunk = false,
 			cycle_next_file = false,
@@ -42,7 +43,7 @@ if ok_codediff then
 				file = oil_icons(formatters.file),
 				folder = oil_icons(formatters.folder),
 			},
-			width = 35,
+			width = require("workspace.models.workspace").panel_width(vim.o.columns),
 			initial_focus = "modified",
 			focus_on_select = true,
 		},
@@ -256,12 +257,6 @@ vim.keymap.set("n", "<leader>gd", ":CodeDiffLive<cr>", { desc = "open git diff" 
 vim.keymap.set("n", "<leader>gh", ":CodeDiff history %<cr>", { desc = "file history" })
 vim.keymap.set("n", "<leader>gH", ":CodeDiff history<cr>", { desc = "repo history" })
 
--- Follow the focused agent: WezTerm writes the worktree of the last focused agent pane to this
--- file (see wezterm/agents.lua), which may be another worktree or another project. Neovim's cwd
--- follows it, and CodeDiff and Neogit views move to it, but only in the tab on screen: rebuilding a
--- hidden view would flash it over the current one, so other tabs catch up when entered.
-local state_dir = (vim.env.XDG_STATE_HOME or (vim.env.HOME .. "/.local/state")) .. "/agent-status"
-
 local target -- worktree root of the last focused agent
 local switching = {} -- tabs whose view is being reopened; their tab events must not start another
 
@@ -302,6 +297,8 @@ local views = {
 	},
 }
 
+local watch_root
+
 local group = vim.api.nvim_create_augroup("FollowAgent", { clear = true })
 vim.api.nvim_create_autocmd("User", {
 	group = group,
@@ -340,6 +337,9 @@ function M.refresh_info(tab)
 	if not root then
 		return
 	end
+	if tab == vim.api.nvim_get_current_tabpage() then
+		watch_root(root)
+	end
 	local base = base_branch(root)
 	git_async(root, { "branch", "--show-current" }, function(branch)
 		git_async(root, { "rev-list", "--left-right", "--count", (base or "HEAD") .. "...HEAD" }, function(counts)
@@ -376,12 +376,34 @@ function M.refresh_info(tab)
 	end)
 end
 
-vim.uv.new_timer():start(3000, 3000, vim.schedule_wrap(function()
-	local tab = vim.api.nvim_get_current_tabpage()
-	if vim.t[tab].git_view then
-		M.refresh_info(tab)
+local watched = { root = nil, watcher = nil, debounce = vim.uv.new_timer() }
+
+function watch_root(root)
+	if watched.root == root then
+		return
 	end
-end))
+	if watched.watcher and not watched.watcher:is_closing() then
+		watched.watcher:close()
+	end
+	watched.root, watched.watcher = root, nil
+	if not root then
+		return
+	end
+	watched.watcher = vim.uv.new_fs_event()
+	watched.watcher:start(root, { recursive = true }, function()
+		watched.debounce:start(300, 0, vim.schedule_wrap(function()
+			local tab = vim.api.nvim_get_current_tabpage()
+			if vim.t[tab].git_view and vim.t[tab].git_view_root == root then
+				M.refresh_info(tab)
+			end
+		end))
+	end)
+end
+
+local function watch_current_tab()
+	local tab = vim.api.nvim_get_current_tabpage()
+	watch_root(vim.t[tab].git_view and vim.t[tab].git_view_root or nil)
+end
 
 local function follow_in_current_tab()
 	if not target or vim.fn.isdirectory(target) == 0 then
@@ -397,103 +419,6 @@ local function follow_in_current_tab()
 		switching[tab] = nil
 	end)
 end
-
-local function read_focus()
-	local f = io.open(state_dir .. "/focus")
-	if not f then
-		return nil
-	end
-	local root = (f:read("*l") or ""):match("^([^\t]+)")
-	f:close()
-	return root
-end
-
--- Which Neovims follow. Each one belongs to the project it was opened in (by git common dir, so a
--- repo's worktrees are one project) and registers it in nvim-<pane>. An agent attaches to the
--- Neovims of its own project; an agent in a project without one moves only the Neovim used last
--- (the editor file, written on focus), which with a single Neovim is always that one. The sidebar
--- (configs/sidebar.lua, started before this loads) is no editor and stays out of it.
-local self_pane = not vim.g.sidebar and vim.env.WEZTERM_PANE or nil
-local self_file = self_pane and (state_dir .. "/nvim-" .. self_pane)
-local common_dirs = {}
-
-local function common_dir(path)
-	if common_dirs[path] == nil then
-		local out = vim.system({ "git", "-C", path, "rev-parse", "--path-format=absolute", "--git-common-dir" }, { text = true })
-			:wait()
-		common_dirs[path] = out.code == 0 and vim.trim(out.stdout) or false
-	end
-	return common_dirs[path] or nil
-end
-
-local function read_line(path)
-	local f = io.open(path)
-	if not f then
-		return nil
-	end
-	local line = f:read("*l")
-	f:close()
-	return line
-end
-
-local function write_line(path, line)
-	local f = io.open(path, "w")
-	if f then
-		f:write(line, "\n")
-		f:close()
-	end
-end
-
--- Make this Neovim belong to the project at path (on start, and when a project is opened).
-function M.set_home(path)
-	if self_file then
-		write_line(self_file, (common_dir(path) or "") .. "\t" .. vim.fn.getpid())
-	end
-end
-
-local function follows(root)
-	if not self_pane then
-		return true
-	end
-	local project = common_dir(root)
-	local claimed, mine = false, false
-	for name, kind in vim.fs.dir(state_dir) do
-		local pane = kind == "file" and name:match("^nvim%-(%d+)$")
-		if pane then
-			local home, pid = (read_line(state_dir .. "/" .. name) or ""):match("^(.*)\t(%d+)$")
-			-- A Neovim that crashed left its file behind; its process is gone.
-			if home ~= "" and home == project and vim.uv.kill(tonumber(pid), 0) == 0 then
-				claimed = true
-				mine = mine or pane == self_pane
-			end
-		end
-	end
-	if claimed then
-		return mine
-	end
-	local last = read_line(state_dir .. "/editor")
-	return not last or last == self_pane
-end
-
--- This file loads during startup (VimEnter), so register right away; a new Neovim is also the one
--- in use. The project is where Neovim was opened: $PWD from the shell that started it, which :cd
--- and :restart leave alone (its cwd and the pane's directory may already follow an agent).
-local function mark_used()
-	if self_pane then
-		write_line(state_dir .. "/editor", self_pane)
-	end
-end
-M.set_home(vim.env.PWD or vim.fn.getcwd())
-mark_used()
-vim.api.nvim_create_autocmd("FocusGained", { group = group, callback = mark_used })
-vim.api.nvim_create_autocmd("VimLeavePre", {
-	group = group,
-	callback = function()
-		if self_file then
-			os.remove(self_file)
-		end
-	end,
-})
 
 -- Editing windows of the current tab that show a file of the project left behind (or the empty
 -- placeholder of an earlier switch) switch to the new project's files, most recently used first, or
@@ -542,65 +467,43 @@ local function go_to(root)
 	follow_in_current_tab()
 end
 
--- Only focus changes made while Neovim runs count; a stale file must not move a fresh session.
-vim.fn.mkdir(state_dir, "p")
--- One write fires several events; act once it settles.
-local watcher, debounce = vim.uv.new_fs_event(), vim.uv.new_timer()
-watcher:start(state_dir, {}, function(_, filename)
-	if filename and vim.fs.basename(filename) == "focus" then
-		debounce:start(
-			100,
-			0,
-			vim.schedule_wrap(function()
-				local root = read_focus()
-				if not root or vim.fn.isdirectory(root) == 0 or not follows(root) then
-					return
-				end
-				go_to(root)
-			end)
-		)
-	end
-end)
 vim.api.nvim_create_autocmd("TabEnter", {
 	group = group,
 	callback = function()
-		-- Tab switches inside a command (CodeDiff opening its tab) settle first.
 		vim.schedule(follow_in_current_tab)
+		vim.schedule(watch_current_tab)
 	end,
 })
 
--- The other way round, from Neovim: <leader>gw picks one of the project's worktrees (its branch and
--- the agent working there). Neovim moves right away and tells WezTerm (wezterm/agents.lua, "follow"),
--- which records it as the followed worktree as if its agent was focused, so other Neovims of the
--- project come along and focusing an agent moves them all again.
+local app = require("configs.app")
+local followed, revealed
 
--- The running agents by worktree (real path): the panes WezTerm lists in workspaces, each with the
--- worktree from its state file (wezterm/bin/agent-status).
-local function agents_by_root()
-	local by_root = {}
-	local f = io.open(state_dir .. "/workspaces")
-	local ok, list = pcall(vim.json.decode, f and f:read("*a") or "")
-	if f then
-		f:close()
+local function follow_agent(id)
+	local agent = app.agent(id)
+	local root = agent and agent.root
+	if root and root ~= followed and vim.fn.isdirectory(root) == 1 then
+		followed = root
+		go_to(root)
 	end
-	for _, w in ipairs(ok and type(list) == "table" and list or {}) do
-		for _, a in ipairs(type(w.agents) == "table" and w.agents or {}) do
-			local agent, state, root = (read_line(state_dir .. "/" .. a.pane) or ""):match("^([^\t]*)\t([^\t]*)\t([^\t]*)")
-			if root and root ~= "" then
-				by_root[vim.uv.fs_realpath(root) or root] = { pane = a.pane, agent = agent, state = state }
-			end
-		end
-	end
-	return by_root
 end
 
-local function switch_worktree(root)
-	go_to(root)
-	if vim.env.WEZTERM_PANE then
-		local agent = agents_by_root()[vim.uv.fs_realpath(root) or root]
-		local branch = vim.trim(vim.system({ "git", "-C", root, "branch", "--show-current" }, { text = true }):wait().stdout or "")
-		require("configs.workspaces").request("follow", root, agent and tostring(agent.pane) or "", branch)
-	end
+if app.role == "editor" and app.workspace then
+	app.on("agents", function(change)
+		if change.model and change.id == app.view().agent then
+			follow_agent(change.id)
+		end
+	end)
+	app.on("views", function(change)
+		if change.id ~= app.workspace or not change.model then
+			return
+		end
+		follow_agent(change.model.agent)
+		local reveal = change.model.reveal
+		if reveal and reveal.at ~= revealed then
+			revealed = reveal.at
+			require("configs.review").reveal(reveal)
+		end
+	end)
 end
 
 vim.keymap.set("n", "<leader>gw", function()
@@ -618,21 +521,29 @@ vim.keymap.set("n", "<leader>gw", function()
 			list[#list].branch = line:match("^branch refs/heads/(.+)$") or line == "detached" and "detached" or list[#list].branch
 		end
 	end
-	local agents = agents_by_root()
+	local function agent_in(root)
+		for _, a in ipairs(app.agents()) do
+			if a:is_running() and same_path(a.root, root) then
+				return a
+			end
+		end
+	end
 	vim.ui.select(list, {
 		prompt = "worktree",
 		format_item = function(wt)
-			local agent = agents[vim.uv.fs_realpath(wt.root) or wt.root]
-			return ("%s %-24s %s%s"):format(
-				same_path(wt.root, here) and "●" or " ",
-				wt.branch,
-				vim.fn.fnamemodify(wt.root, ":~"),
-				agent and ("  " .. agent.agent .. " " .. agent.state) or ""
-			)
+			local agent = agent_in(wt.root)
+			return ("%s %-24s %s%s"):format(same_path(wt.root, here) and "●" or " ", wt.branch, vim.fn.fnamemodify(wt.root, ":~"), agent and ("  " .. agent:display_name() .. " " .. agent:status()) or "")
 		end,
 	}, function(wt)
-		if wt then
-			switch_worktree(wt.root)
+		if not wt then
+			return
+		end
+		go_to(wt.root)
+		local agent = agent_in(wt.root)
+		if agent then
+			app.update_view(function(v)
+				v:select(agent.id)
+			end)
 		end
 	end)
 end, { desc = "switch worktree" })

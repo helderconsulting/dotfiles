@@ -1,11 +1,37 @@
 local M = {}
 
 M.height = 3
+M.dot = "  ●"
 M.heading = 1
 
 local kinds = { ok = "CardOk", busy = "CardBusy", bad = "CardBad", off = "CardOff" }
+
+M.meter_width = 10
+
+M.meter_line = "━"
+
+function M.meter(m, room, kind)
+	if not m.fraction then
+		local text = M.fit(m.label or "", room)
+		return text, { { 0, #text, kind .. "Detail" } }
+	end
+	local filled = math.max(0, math.min(M.meter_width, math.floor(m.fraction * M.meter_width + 0.5)))
+	local percent = ("%4s "):format(m.percent or "")
+	local bar = string.rep(M.meter_line, M.meter_width)
+	local text = M.fit(percent .. bar .. ((m.label or "") ~= "" and ("  " .. m.label) or ""), room)
+	local start = #percent
+	local split, track = start + #string.rep(M.meter_line, filled), start + #bar
+	return text, {
+		{ 0, start, kind },
+		{ start, split, kind },
+		{ split, track, kind .. "Track" },
+		{ track, #text, kind .. "Detail" },
+	}
+end
 local layouts = {}
 local stickies = {}
+
+local written = {}
 
 local function pin(buf, key, win, ns, lines, marks, first, last, row)
 	stickies[buf] = stickies[buf] or {}
@@ -20,12 +46,18 @@ local function pin(buf, key, win, ns, lines, marks, first, last, row)
 		s = { buf = vim.api.nvim_create_buf(false, true) }
 		stickies[buf][key] = s
 	end
-	vim.bo[s.buf].modifiable = true
-	vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, vim.list_slice(lines, first, last))
-	vim.bo[s.buf].modifiable = false
-	vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
-	for _, m in ipairs(marks) do
-		if m.line >= first - 1 and m.line <= last - 1 then
+	local content = vim.list_slice(lines, first, last)
+	local shown = vim.tbl_filter(function(m)
+		return m.line >= first - 1 and m.line <= last - 1
+	end, marks)
+	local key = vim.inspect({ content, shown, first })
+	if s.key ~= key then
+		s.key = key
+		vim.bo[s.buf].modifiable = true
+		vim.api.nvim_buf_set_lines(s.buf, 0, -1, false, content)
+		vim.bo[s.buf].modifiable = false
+		vim.api.nvim_buf_clear_namespace(s.buf, ns, 0, -1)
+		for _, m in ipairs(shown) do
 			vim.api.nvim_buf_set_extmark(s.buf, ns, m.line - first + 1, m.col, {
 				end_col = m.end_col,
 				hl_group = m.group,
@@ -135,6 +167,15 @@ function M.index_at(line, buf)
 	return line > M.heading and math.floor((line - M.heading - 1) / M.height) + 1 or nil
 end
 
+function M.inline_line(buf, index)
+	local layout = layouts[buf]
+	for k, t in ipairs(layout and layout.inline_index or {}) do
+		if t == index then
+			return layout.inline_starts[k]
+		end
+	end
+end
+
 function M.inline_at(line, buf)
 	local layout = buf and layouts[buf]
 	if not (layout and layout.inline_first and line >= layout.inline_first and line <= layout.inline_last) then
@@ -168,25 +209,40 @@ function M.render(buf, win, ns, list, card, opts)
 		local prefix = o.indent .. "▌"
 		local inset = vim.fn.strdisplaywidth(o.indent) + (o.multi and 4 or 3)
 		local rows = {}
-		for k = 1, o.rows or 3 do
+		for k = 1, o.rows or (type(text[4]) == "table" and 4 or 3) do
 			local parts
-			if o.wrap and k < 3 then
+			local room = width - inset - (k == 1 and e.unread and vim.fn.strdisplaywidth(M.dot) or 0)
+			if type(text[k]) == "table" then
+				local line, spans = M.meter(text[k], room, kind)
+				table.insert(rows, { line, groups[3], spans = spans })
+				parts = {}
+			elseif o.wrap and k < 3 then
 				local max = k == 1 and 2 or o.chosen and math.max(math.floor(height / 3), 3) or 2
-				parts = M.wrap(text[k], width - inset, max)
+				parts = M.wrap(text[k], room, max)
 			else
-				parts = { M.fit(text[k], width - inset) }
+				parts = { M.fit(text[k], room) }
 			end
 			for _, part in ipairs(parts) do
 				table.insert(rows, { part, groups[k] })
 			end
 		end
+		if e.unread and rows[1] then
+			rows[1].dot = true
+		end
 		local first = #lines + 1
 		for _, row in ipairs(rows) do
 			local gap = o.mark_on and "▌ " or o.multi and "  " or " "
-			local line_text = prefix .. gap .. row[1]
+			local line_text = prefix .. gap .. row[1] .. (row.dot and M.dot or "")
 			table.insert(lines, line_text)
 			mark(#lines - 1, #o.indent, #prefix, kind)
 			mark(#lines - 1, #prefix, #line_text, row[2], bg)
+			for _, span in ipairs(row.spans or {}) do
+				local at = #prefix + #gap
+				mark(#lines - 1, at + span[1], at + span[2], span[3])
+			end
+			if row.dot then
+				mark(#lines - 1, #line_text - #M.dot, #line_text, "CardUnread")
+			end
 			if o.mark_on then
 				mark(#lines - 1, #prefix, #prefix + #"▌", "CardMarked")
 			end
@@ -218,7 +274,7 @@ function M.render(buf, win, ns, list, card, opts)
 			local from = inline.from or inline.limit and math.max(1, #inline.items - inline.limit + 1) or 1
 			local to = math.min(inline.to or #inline.items, #inline.items)
 			local first_hint = inline.active
-				and ((inline.selected or from) .. " of " .. #inline.items .. " · " .. (from > 1 and ("↑ " .. (from - 1) .. " older") or "start of thread"))
+				and ((inline.selected or from) .. " of " .. #inline.items .. " · " .. ((inline.unread or 0) > 0 and (inline.unread .. " new") or from > 1 and ("↑ " .. (from - 1) .. " newer") or "latest"))
 				or nil
 			if first_hint then
 				table.insert(lines, "")
@@ -242,7 +298,7 @@ function M.render(buf, win, ns, list, card, opts)
 				end
 			end
 			layout.inline_last = #lines
-			local last_hint = inline.active and (to < #inline.items and ("↓ " .. (#inline.items - to) .. " newer") or "latest") or nil
+			local last_hint = inline.active and (to < #inline.items and ("↓ " .. (#inline.items - to) .. " older") or "start of thread") or nil
 			if last_hint then
 				table.insert(lines, "")
 				table.insert(lines, "  " .. last_hint)
@@ -270,16 +326,20 @@ function M.render(buf, win, ns, list, card, opts)
 		table.insert(lines, "  " .. (opts.empty or "nothing here"))
 		mark(#lines - 1, 0, #lines[#lines], "CardOffDetail")
 	end
-	vim.bo[buf].modifiable = true
-	vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
-	vim.bo[buf].modifiable = false
-	vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
-	for _, m in ipairs(marks) do
-		vim.api.nvim_buf_set_extmark(buf, ns, m.line, m.col, {
-			end_col = m.end_col,
-			hl_group = m.group,
-			line_hl_group = m.line_group,
-		})
+	local key = vim.inspect({ lines, marks })
+	if written[buf] ~= key then
+		written[buf] = key
+		vim.bo[buf].modifiable = true
+		vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+		vim.bo[buf].modifiable = false
+		vim.api.nvim_buf_clear_namespace(buf, ns, 0, -1)
+		for _, m in ipairs(marks) do
+			vim.api.nvim_buf_set_extmark(buf, ns, m.line, m.col, {
+				end_col = m.end_col,
+				hl_group = m.group,
+				line_hl_group = m.line_group,
+			})
+		end
 	end
 	local head, foot
 	if selected then

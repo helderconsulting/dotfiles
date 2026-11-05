@@ -47,10 +47,14 @@ end
 
 -- An .rdp file's settings by key, lines like "full address:s:host". Windows writes them in UTF-16,
 -- which reads as ASCII once the zero bytes and the byte order mark are gone.
-local function settings(file)
+local function lines(file)
 	local text = (read(file) or ""):gsub("%z", ""):gsub("^\239\187\191", ""):gsub("^\255\254", "")
+	return text:gmatch("[^\r\n]+")
+end
+
+local function settings(file)
 	local out = {}
-	for line in text:gmatch("[^\r\n]+") do
+	for line in lines(file) do
 		local key, value = line:match("^([^:]+):%a:(.*)$")
 		if key then
 			out[key:lower()] = value
@@ -73,6 +77,8 @@ local function session(name)
 	end
 	return nil, code
 end
+
+local ends = { [0] = true, [1] = true, [2] = true, [3] = true, [11] = true, [131] = true }
 
 local function check_password(name, done)
 	vim.system({ "security", "find-generic-password", "-s", service, "-a", name }, {}, function(res)
@@ -99,9 +105,7 @@ function M.fetch(done)
 				word, state = "connecting", "busy"
 			elseif route and not tailscale.connected() then
 				word, state = "vpn off", "bad"
-			elseif code and code >= 128 then
-				-- FreeRDP's exit codes from 128 are connection errors (a refused login, an unreachable
-				-- host); the lower ones are ways a session ends.
+			elseif code and not ends[code] then
 				word, state = "failed", "bad"
 			end
 			local key = account(s["username"], name)
@@ -198,10 +202,41 @@ local function ask_password(key, done)
 	end)
 end
 
-local function connect(e, view, password)
+local windowed = { ["screen mode id"] = "i:1", ["smart sizing"] = "i:0" }
+
+local function session_file(e)
+	local out = {}
+	for key, value in pairs(windowed) do
+		table.insert(out, key .. ":" .. value)
+	end
+	for line in lines(e.file) do
+		local key = line:match("^([^:]+):%a:")
+		if not (key and windowed[key:lower()]) then
+			table.insert(out, line)
+		end
+	end
+	local file = path(e.name, "rdp")
+	vim.fn.writefile(out, file)
+	return file
+end
+
+local function window_size(done)
+	local script = 'ObjC.import("AppKit"); var f = $.NSScreen.mainScreen.visibleFrame.size;'
+		.. ' Math.round(f.width * 0.8) + "x" + Math.round(f.height * 0.8)'
+	vim.system({ "osascript", "-l", "JavaScript", "-e", script }, { text = true }, function(res)
+		vim.schedule(function()
+			done(res.code == 0 and res.stdout:match("^%d+x%d+") or "1600x900")
+		end)
+	end)
+end
+
+local function launch(e, view, password, size)
 	vim.fn.mkdir(runs, "p")
 	os.remove(path(e.name, "exit"))
-	local args = { e.file, "/cert:tofu", "+dynamic-resolution", "+clipboard", "/t:" .. e.name }
+	local args = { session_file(e), "/size:" .. size, "/cert:tofu", "+clipboard", "/t:" .. e.name }
+	if not e.gateway or e.gateway == "" then
+		table.insert(args, "/gateway:usage-method:none")
+	end
 	if password then
 		table.insert(args, "/p:" .. password)
 	end
@@ -225,6 +260,12 @@ local function connect(e, view, password)
 	f:close()
 	opening[e.name] = nil
 	view.refresh()
+end
+
+local function connect(e, view, password)
+	window_size(function(size)
+		launch(e, view, password, size)
+	end)
 end
 
 local function open(e, view)
@@ -292,7 +333,12 @@ local function add(view)
 			vim.ui.input({ prompt = "user (domain\\user): " }, function(user)
 				vim.fn.mkdir(M.dir, "p")
 				local file = M.dir .. "/" .. name .. ".rdp"
-				local lines = { "full address:s:" .. vim.trim(host), "screen mode id:i:1", "prompt for credentials:i:0" }
+				local lines = {
+					"full address:s:" .. vim.trim(host),
+					"screen mode id:i:1",
+					"dynamic resolution:i:1",
+					"prompt for credentials:i:0",
+				}
 				if user and vim.trim(user) ~= "" then
 					table.insert(lines, "username:s:" .. vim.trim(user))
 				end
@@ -369,7 +415,7 @@ M.actions = {
 				return
 			end
 			os.remove(e.file)
-			for _, ext in ipairs({ "log", "pid", "exit" }) do
+			for _, ext in ipairs({ "log", "pid", "exit", "rdp" }) do
 				os.remove(path(e.name, ext))
 			end
 			-- The password stays while other desktops log in as the same user.

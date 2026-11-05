@@ -1,0 +1,229 @@
+import { Provider } from "./providers/provider.mjs";
+
+export const continuePrompt =
+	"agentd restarted while you were working, so your last turn was cut off. Continue the task from where you stopped.";
+
+export class Daemon {
+	#providers;
+	#store;
+	#bridge;
+	#log;
+	#grace;
+	#stale;
+	#onShutdown;
+	#sessions = new Map();
+	#holders = new Set();
+	#idle = null;
+	#closing = false;
+	#draining = false;
+
+	constructor({ providers, store, bridge, log = () => {}, grace = 8000, stale = () => false, onShutdown = () => {} }) {
+		this.#providers = Object.fromEntries(
+			providers.map((p) => {
+				if (!(p instanceof Provider)) throw new Error(`${p?.constructor?.name} is not a Provider`);
+				return [p.name, p];
+			}),
+		);
+		this.#store = store;
+		this.#bridge = bridge;
+		this.#log = log;
+		this.#grace = grace;
+		this.#stale = stale;
+		this.#onShutdown = onShutdown;
+	}
+
+	get sessions() {
+		return [...this.#sessions.keys()];
+	}
+
+	get holders() {
+		return this.#holders.size;
+	}
+
+	get draining() {
+		return this.#draining;
+	}
+
+	broadcast(event) {
+		const line = JSON.stringify(event) + "\n";
+		for (const conn of this.#holders) conn.write?.(line);
+	}
+
+	bridgeState(state) {
+		this.#log("bridge.state", { state });
+		this.broadcast({ event: "bridge", state });
+	}
+
+	async boot() {
+		this.#bridge.send("sync", { sessions: [] });
+		const saved = this.#store.list();
+		for (const entry of saved) {
+			const prompt = entry.busy ? continuePrompt : undefined;
+			this.#open({ ...entry, resume: entry.id, prompt }).catch((err) => this.#log("resume.failed", { id: entry.id, error: err.message }));
+		}
+		this.#armIdle();
+		return saved.length;
+	}
+
+	#host() {
+		return {
+			report: (payload) => this.#bridge.send("runtime", { report: payload }),
+			hook: (payload) => this.#bridge.request("hook", { payload }),
+			ask: (req) => this.#bridge.request("ask", req),
+			cancel: (request) => this.#bridge.send("cancel", { request }),
+			changed: (session) => {
+				if (this.#sessions.has(session.id)) this.#store.save(session);
+				this.#drainCheck();
+			},
+		};
+	}
+
+	async #open({ provider = "claude", cwd, prompt, model, mode, resume }) {
+		const impl = this.#providers[provider];
+		if (!impl) throw new Error(`no provider ${provider}`);
+		const session = impl.open({ cwd, prompt, model, mode, resume, host: this.#host() });
+		this.#sessions.set(session.id, session);
+		session.done.then((error) => this.#ended(session, error));
+		try {
+			await session.started;
+		} catch (err) {
+			this.#sessions.delete(session.id);
+			this.#store.forget(session.id);
+			throw Object.assign(err, { code: "plan" });
+		}
+		this.#store.save(session);
+		this.#bridge.send("started", { id: session.id, cwd: session.cwd });
+		this.#log("session.start", { id: session.id, provider, cwd, resumed: Boolean(resume) });
+		return session;
+	}
+
+	#ended(session, error) {
+		if (this.#sessions.get(session.id) !== session) return;
+		this.#sessions.delete(session.id);
+		if (!this.#closing) this.#store.forget(session.id);
+		this.#log("session.end", { id: session.id, error, kept: this.#closing });
+		this.#bridge.send("runtime", { report: { type: "runtime", id: session.id, provider: session.provider, event: "lose", reason: error } });
+	}
+
+	#find(id) {
+		const session = this.#sessions.get(id);
+		if (!session) throw Object.assign(new Error(`no session ${id} here`), { code: "unknown" });
+		return session;
+	}
+
+	hold(conn) {
+		this.#holders.add(conn);
+		this.#disarmIdle();
+		conn.on("close", () => {
+			this.#holders.delete(conn);
+			this.#armIdle();
+		});
+	}
+
+	#busy() {
+		return [...this.#sessions.values()].some((s) => s.busy);
+	}
+
+	#drainCheck() {
+		if (this.#draining && !this.#busy()) this.shutdown("code changed");
+	}
+
+	#armIdle() {
+		if (this.#holders.size > 0 || this.#closing || this.#draining) return;
+		if (this.#stale()) {
+			if (!this.#busy()) return this.shutdown("code changed");
+			this.#draining = true;
+			this.#log("drain", { busy: [...this.#sessions.values()].filter((s) => s.busy).map((s) => s.id) });
+			return;
+		}
+		this.#disarmIdle();
+		this.#idle = setTimeout(() => {
+			if (this.#holders.size === 0) this.shutdown("no workspace holds agentd");
+		}, this.#grace);
+	}
+
+	#disarmIdle() {
+		if (this.#idle) clearTimeout(this.#idle);
+		this.#idle = null;
+	}
+
+	async shutdown(reason) {
+		if (this.#closing) return;
+		this.#closing = true;
+		this.#disarmIdle();
+		this.#log("shutdown", { reason, sessions: this.#sessions.size });
+		this.broadcast({ event: "shutdown", reason });
+		const done = [...this.#sessions.values()].map((s) => {
+			s.stop();
+			return s.done;
+		});
+		await Promise.race([Promise.all(done), new Promise((resolve) => setTimeout(resolve, 3000))]);
+		this.#bridge.close();
+		this.#onShutdown(reason);
+	}
+
+	ops = {
+		ping: async () => ({ providers: Object.keys(this.#providers), sessions: this.sessions, holders: this.#holders.size }),
+
+		hold: async (_req, conn) => {
+			this.hold(conn);
+			return { keep: true, bridge: this.#bridge.state ?? "up", draining: this.#draining };
+		},
+
+		catalog: async ({ cwd }) => {
+			const list = [];
+			for (const [name, impl] of Object.entries(this.#providers)) {
+				try {
+					list.push({ provider: name, models: await impl.models(cwd) });
+				} catch (err) {
+					list.push({ provider: name, models: [], error: err.message });
+				}
+			}
+			return { providers: list };
+		},
+
+		start: async ({ provider, cwd, prompt, model, mode, resume }) => {
+			if (resume && this.#sessions.has(resume)) {
+				if (prompt) this.#sessions.get(resume).send(prompt);
+				return { id: resume };
+			}
+			const session = await this.#open({ provider, cwd, prompt, model, mode, resume });
+			return { id: session.id };
+		},
+
+		send: async ({ id, text }) => {
+			this.#find(id).send(text);
+			return {};
+		},
+
+		interrupt: async ({ id }) => {
+			await this.#find(id).interrupt();
+			return {};
+		},
+
+		model: async ({ id, model }) => {
+			await this.#find(id).setModel(model);
+			return {};
+		},
+
+		mode: async ({ id, mode }) => {
+			await this.#find(id).setMode(mode);
+			return {};
+		},
+
+		models: async ({ id }) => ({ models: await this.#find(id).models() }),
+
+		stop: async ({ id }) => {
+			const session = this.#find(id);
+			this.#store.forget(id);
+			session.stop();
+			return {};
+		},
+	};
+
+	async handle(req, conn) {
+		const op = this.ops[req.op];
+		if (!op) throw new Error(`unknown op ${req.op}`);
+		return op(req, conn);
+	}
+}

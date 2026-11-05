@@ -33,6 +33,9 @@ require("blink.cmp").setup({
 	},
 	sources = {
 		default = { "lsp", "path", "snippets", "buffer" },
+		providers = {
+			claude = { name = "claude", module = "configs.claude_source", score_offset = 10 },
+		},
 	},
 	cmdline = {
 		enabled = true,
@@ -43,7 +46,7 @@ require("blink.cmp").setup({
 				return { "buffer" }
 			end
 			if type == ":" then
-				return { "cmdline" }
+				return require("configs.app").role == "conversation" and { "claude", "cmdline" } or { "cmdline" }
 			end
 			return {}
 		end,

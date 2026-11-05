@@ -27,11 +27,6 @@ local function open_project(path)
 	end
 	vim.cmd("cd " .. vim.fn.fnameescape(path))
 	vim.cmd("edit .")
-	-- This Neovim now belongs to the project: it follows the agents working in it (packs/git.lua).
-	local ok, git = pcall(require, "packs.git")
-	if ok then
-		git.set_home(path)
-	end
 end
 
 vim.api.nvim_create_user_command("Projects", function()
@@ -80,7 +75,7 @@ vim.keymap.set("n", "<leader>pn", ":ProjectNew<cr>", { desc = "new project" })
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("ProjectsStart", { clear = true }),
 	callback = function()
-		if vim.fn.argc() ~= 0 or vim.api.nvim_buf_get_name(0) ~= "" then
+		if require("configs.app").role ~= "editor" or vim.fn.argc() ~= 0 or vim.api.nvim_buf_get_name(0) ~= "" then
 			return
 		end
 		-- Inside a repo, start on the live diff of the working tree; elsewhere pick a project.

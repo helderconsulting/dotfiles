@@ -1,0 +1,6 @@
+---
+# Neovim's Lua globals for selene; `vim` is a table with any fields.
+base: lua51
+globals:
+  vim:
+    any: true

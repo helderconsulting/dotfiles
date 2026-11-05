@@ -3,6 +3,7 @@ local config = wezterm.config_builder()
 
 config.font = wezterm.font("JetBrains Mono")
 config.font_size = 18
+config.line_height = 1.15
 config.color_scheme = "green"
 config.enable_tab_bar = false
 config.window_decorations = "RESIZE"
@@ -65,6 +66,6 @@ table.insert(config.keys, {
 	}),
 })
 
-require("agents").apply(config)
+require("workspaces").apply(config)
 
 return config

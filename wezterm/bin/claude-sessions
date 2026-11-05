@@ -1,5 +1,5 @@
 #!/bin/sh
-# Recent Claude Code sessions, newest first, for the CTRL|ALT w picker (wezterm/agents.lua): modified
+# Recent Claude Code sessions, newest first, for the CTRL|ALT w picker (wezterm/workspaces/picker.lua): modified
 # time, session id, folder and title (the /rename one, else Claude's own, else the last prompt), tab
 # separated. A session's line is cached until its file changes, since the files run to megabytes.
 # Full paths: WezTerm runs this without the shell's PATH.
@@ -8,7 +8,7 @@
 
 n=${1:-20}
 export LC_ALL=C
-cache="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status/sessions"
+cache="${XDG_STATE_HOME:-$HOME/.local/state}/workspace/sessions"
 mkdir -p "$cache"
 field() {
 	/usr/bin/grep -o "\"$1\":\"[^\"]*\"" | tail -n 1 | sed "s/^\"$1\":\"//; s/\"\$//"

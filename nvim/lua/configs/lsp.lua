@@ -68,6 +68,15 @@ vim.api.nvim_create_autocmd("LspProgress", {
 	end,
 })
 
+local lsp_start = vim.lsp.start
+vim.lsp.start = function(config, opts)
+	local bufnr = opts and opts.bufnr or vim.api.nvim_get_current_buf()
+	if bufnr ~= 0 and vim.api.nvim_buf_is_valid(bufnr) and vim.b[bufnr].no_lsp then
+		return nil
+	end
+	return lsp_start(config, opts)
+end
+
 vim.lsp.enable({
 	"c_ls",
 	"lua_ls",

@@ -1,6 +1,6 @@
 -- Neovim's status lives in the WezTerm agent bar instead of a statusline and tabline: mode, buffers,
 -- diagnostics, LSP progress and cursor position go to WezTerm as one JSON user var
--- (nvim_status), drawn by wezterm/agents.lua in this pane's entry. Outside WezTerm nothing changes.
+-- (nvim_status), drawn by wezterm/workspaces/bar.lua in this pane's entry. Outside WezTerm nothing changes.
 if not vim.env.WEZTERM_PANE then
 	return
 end

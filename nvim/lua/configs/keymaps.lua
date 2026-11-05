@@ -25,18 +25,8 @@ end, { desc = "show code actions" })
 
 vim.keymap.set("n", "<leader>W", ":wa<cr>", { desc = "save all" })
 vim.keymap.set("n", "<leader>w", ":w<cr>", { desc = "save file" })
--- Move between windows; at the edge of Neovim hand the move to WezTerm, which continues into the
--- next pane or AeroSpace window (see wezterm/navigate.lua). The counter makes a repeated direction
--- still a change for WezTerm's user-var-changed event. Left and right page through the buffers
--- first, and in the diff view up and down step through the changes first, across files. Past the
--- first or last one they move on to the next window, then out of Neovim.
-local nav_count = 0
 local function hand_off(direction)
-	if vim.env.WEZTERM_PANE then
-		nav_count = nav_count + 1
-		local value = vim.base64.encode(direction .. ":" .. nav_count)
-		vim.api.nvim_ui_send(("\27]1337;SetUserVar=nav=%s\7"):format(value))
-	end
+	require("configs.app").hand_off(direction)
 end
 
 -- Listed file buffers of the current project, in the order the WezTerm bar shows them
@@ -153,26 +143,11 @@ vim.keymap.set("n", "<M-Right>", move("l", "Right"), { desc = "move to right win
 vim.keymap.set("n", "<M-Up>", move("k", "Up"), { desc = "move to window above" })
 vim.keymap.set("n", "<M-Down>", move("j", "Down"), { desc = "move to window below" })
 
--- A new agent session next to Neovim, in its project: like CTRL|ALT Enter in WezTerm, a split to the
--- right running claude, then a shell so the pane stays when the agent exits. Started as the shell's
--- command rather than typed in, since zsh prompts start in vi normal mode. Neovims of the project
--- follow it (packs/git.lua).
-vim.keymap.set("n", "<leader>n", function()
-	if not vim.env.WEZTERM_PANE then
-		vim.notify("new agent: not running in WezTerm", vim.log.levels.WARN)
-		return
+vim.keymap.set("n", "<leader>m", function()
+	local app = require("configs.app")
+	local agent = app.agent(app.view().agent)
+	if not agent then
+		return vim.notify("no agent selected in this workspace", vim.log.levels.WARN)
 	end
-	local shell = vim.env.SHELL or "zsh"
-	vim.system({
-		"wezterm", "cli", "split-pane", "--right",
-		"--pane-id", vim.env.WEZTERM_PANE,
-		"--cwd", vim.fn.getcwd(),
-		"--", shell, "-ic", "claude; exec " .. shell,
-	}, { text = true }, function(res)
-		if res.code ~= 0 then
-			vim.schedule(function()
-				vim.notify("new agent: " .. (res.stderr or "split failed"), vim.log.levels.ERROR)
-			end)
-		end
-	end)
-end, { desc = "new agent session" })
+	require("configs.drafts").compose({ agent = agent.id, cwd = agent.root, name = agent:display_name() })
+end, { desc = "message the followed agent" })

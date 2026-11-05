@@ -1,0 +1,5 @@
+#!/bin/sh
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+file="${XDG_STATE_HOME:-$HOME/.local/state}/workspace/trace.log"
+filter=${1:-.}
+tail -n "${2:-200}" -F "$file" | jq -c --unbuffered "select($filter)"

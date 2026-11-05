@@ -15,3 +15,4 @@ fi
 
 brew bundle --file Brewfile
 nvim --headless -u NONE -l bootstrap.lua
+npm ci --prefix ../agentd

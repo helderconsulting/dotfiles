@@ -1,13 +1,13 @@
 #!/bin/sh
 # Focus the Nth entry of the WezTerm agent bar from anywhere, and bring WezTerm forward on its
 # AeroSpace workspace. Bound to ctrl-alt-N in aerospace.toml. Each WezTerm window writes its bar
-# order to bar-<window id> (wezterm/agents.lua) and ends its title with "[w<window id>]", so the
+# order to bar-<window id> (wezterm/workspaces/bar.lua) and ends its title with "[w<window id>]", so the
 # AeroSpace window and the WezTerm window can be matched. Full paths: AeroSpace runs this without
 # the shell's PATH.
 #
 #   agent-jump <n>
 
-state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-status"
+state_dir="${XDG_STATE_HOME:-$HOME/.local/state}/workspace"
 wezterm=/opt/homebrew/bin/wezterm
 aerospace=/opt/homebrew/bin/aerospace
 bundle=com.github.wez.wezterm

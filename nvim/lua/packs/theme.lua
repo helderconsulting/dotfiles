@@ -46,6 +46,19 @@ local highlights = {
 	ReviewResolvedSign = { fg = palette.green, bold = true },
 	ReviewReady = { fg = palette.bright, bold = true },
 	ReviewStatus = { fg = "#6A6280" },
+	AnswerTurn = { fg = palette.purple, bold = true },
+	AnswerDim = { fg = "#6A6280" },
+	AnswerPrompt = { bg = "#0E140E" },
+	AnswerPromptText = { fg = "#9CC79C" },
+	AnswerQuote = { fg = "#7A7290", italic = true },
+	AnswerQuoteBar = { fg = palette.purple },
+	AnswerComment = { bg = "#0E140E" },
+	AskTitle = { fg = palette.orange, bold = true },
+	AskKey = { fg = palette.purple },
+	AskChosen = { fg = palette.purple, bold = true },
+	AskCurrent = { bg = "#16221A" },
+	AnswerCommentText = { fg = "#9CC79C", bg = "#0E140E" },
+	AnswerCommentStatus = { fg = "#6A6280", bg = "#0E140E" },
 	InfoFloat = { bg = "#0C140C" },
 	-- Docker view (configs/docker.lua): tabs like the bar's entries, sections like fzf-lua's list
 	-- (packs/fzf.lua: fg+ on bg+, bold like fzf's current line), container status in the agent
@@ -61,6 +74,7 @@ local highlights = {
 	-- Cards (configs/cards.lua) in their status's colors; the cursor takes the current one's background.
 	CardCursor = { fg = "#0F2A0F", bg = "#0F2A0F" },
 	CardMarked = { fg = palette.purple },
+	CardUnread = { fg = palette.orange, bold = true },
 	CardMarkedBg = { bg = "#15111D" },
 	-- Window separators match WezTerm's split lines and agent bar edges.
 	WinSeparator = { fg = "#223022" },
@@ -69,14 +83,15 @@ for group, spec in pairs(highlights) do
 	vim.api.nvim_set_hl(0, group, spec)
 end
 for kind, c in pairs({
-	Ok = { fg = palette.green, bright = palette.bright, dim = palette.dim, bg = "#0F2A0F", inactive = "#0B1A0B" },
-	Busy = { fg = palette.purple, bright = "#C0A8EC", dim = "#6A5A88", bg = "#201A2D", inactive = "#15111D" },
-	Bad = { fg = palette.orange, bright = "#F2AE78", dim = "#8E5F3A", bg = "#2A1C10", inactive = "#1C130B" },
-	Off = { fg = "#8C8C8C", bright = "#B4B4B4", dim = "#555555", bg = "#1C1C1C", inactive = "#121212" },
+	Ok = { fg = palette.green, bright = palette.bright, dim = palette.dim, track = "#234023", bg = "#0F2A0F", inactive = "#0B1A0B" },
+	Busy = { fg = palette.purple, bright = "#C0A8EC", dim = "#6A5A88", track = "#3A3150", bg = "#201A2D", inactive = "#15111D" },
+	Bad = { fg = palette.orange, bright = "#F2AE78", dim = "#8E5F3A", track = "#4A3220", bg = "#2A1C10", inactive = "#1C130B" },
+	Off = { fg = "#8C8C8C", bright = "#B4B4B4", dim = "#555555", track = "#333333", bg = "#1C1C1C", inactive = "#121212" },
 }) do
 	vim.api.nvim_set_hl(0, "Card" .. kind, { fg = c.fg })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Current", { fg = c.bright, bold = true })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Detail", { fg = c.dim })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Track", { fg = c.track })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Bg", { bg = c.bg })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "BgInactive", { bg = c.inactive })
 end
