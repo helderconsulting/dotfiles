@@ -1,12 +1,16 @@
 local app = require("configs.app")
 local runner = require("configs.runner")
+local repo = require("workspace.epics")
 
 local M = {}
 
-local Todo = app.models.Todo
-local Draft = app.models.Draft
+local Todo, Epic, Draft = app.models.Todo, app.models.Epic, app.models.Draft
 
-local function names()
+local function clock()
+	return require("workspace.nvim").clock()
+end
+
+function M.names()
 	local by_id = {}
 	for _, a in ipairs(app.agents()) do
 		by_id[a.id] = a:display_name()
@@ -16,42 +20,34 @@ local function names()
 	end
 end
 
-local function entry(t, name_of, now)
-	return { id = t.id, todo = t, name = t:title(), kind = t:tone(), order = t.state == "open" and 10 or 11, card = t:card(name_of, now) }
+function M.listed(folder)
+	return repo.listed(app.store(), folder)
 end
 
-function M.card_of(todo)
-	return todo:card(names(), app.now())
+function M.epic(id)
+	return repo.get(app.store(), id)
 end
 
-function M.entries(folder)
-	local name_of, now = names(), app.now()
-	return vim.tbl_map(function(t)
-		return entry(t, name_of, now)
-	end, Todo.listed_in(app.store():all(Todo), folder))
+function M.epic_of(todo_id)
+	return repo.of_todo(app.store(), todo_id)
 end
 
-local function update(id, fn)
-	return app.store():update(Todo, id, function(t, created)
-		if created then
-			return false
-		end
-		return fn(t, app.now())
-	end)
+function M.todo(id)
+	local epic = M.epic_of(id)
+	return epic and epic:todo(id) or nil
 end
 
-function M.create(root, text, from)
-	local id = Todo.new_id(math.random)
-	while app.store():get(Todo, id) do
-		id = Todo.new_id(math.random)
-	end
-	app.store():update(Todo, id, function(t)
-		local fresh = Todo.make(id, text, root, from or "you", app.now())
-		for _, f in ipairs(Todo.fields) do
-			t[f] = fresh[f]
-		end
-	end)
-	return id
+function M.create_epic(root, title, from)
+	return repo.find_or_create(app.store(), root, title, from or "you", clock()).id
+end
+
+function M.create(root, spec, from, epic_id)
+	local epic = epic_id and M.epic(epic_id) or repo.find_or_create(app.store(), root, Epic.loose_ends, "you", clock())
+	return repo.add(app.store(), epic, spec, from or "you", clock())
+end
+
+local function change(todo_id, action, ...)
+	return repo.change(app.store(), todo_id, action, ...)
 end
 
 function M.save(target, text)
@@ -59,83 +55,187 @@ function M.save(target, text)
 	if text == "" then
 		return
 	end
-	if target.todo == true then
-		return M.create(target.cwd, text, "you")
-	end
-	update(target.todo, function(t, now)
-		return t:edit(text, now)
-	end)
-end
-
-function M.add(_, ui)
-	local folder = ui.folder()
-	require("configs.drafts").compose({ todo = true, cwd = folder, name = "a new todo" })
-end
-
-function M.send(e)
-	app.update_view(function(v)
-		v:request_pick({ kind = "send_todo", todo = e.id, cwd = e.todo.root }, app.now())
-	end)
-	app.focus("conversation")
-end
-
-function M.finish(e)
-	update(e.id, function(t, now)
-		return t:finish("", now)
-	end)
-end
-
-function M.drop(e, ui)
-	if ui.batch or ui.confirm("drop todo " .. e.name .. "?") then
-		update(e.id, function(t, now)
-			return t:drop(now)
+	if target.epic == true then
+		return M.create_epic(target.cwd, text:match("[^\n]+"), "you")
+	elseif target.epic then
+		return app.store():update(Epic, target.epic, function(e, created)
+			if created then
+				return false
+			end
+			e.title = text:match("[^\n]+")
+			return true
 		end)
 	end
+	local ok, why = Todo.validate(Todo.parse(text))
+	if not ok then
+		return false, why
+	end
+	if target.todo == true then
+		return M.create(target.cwd, text, "you", target.in_epic)
+	end
+	return change(target.todo, "edit", text, app.now())
 end
 
-function M.edit(e)
+local function compose(target, text)
 	local drafts = require("configs.drafts")
-	local target = { todo = e.id, cwd = e.todo.root, name = "todo " .. e.id }
-	if not drafts.load(target) then
-		drafts.write(target, e.todo.text)
+	if text and not drafts.load(target) then
+		drafts.write(target, text)
 	end
 	drafts.compose(target)
 end
 
-local function deliver(todo, agent, done)
-	local draft = Draft.new({ agent = agent.id, cwd = agent.root or agent.cwd, name = agent:display_name() }, todo:message())
-	runner.deliver(draft, done)
+function M.new_epic(folder)
+	compose({ epic = true, cwd = folder, name = "a new epic" })
+end
+
+function M.add_to(epic_id, folder, text)
+	compose({ todo = true, in_epic = epic_id, cwd = folder, name = "a new todo" }, text or Todo.template)
+end
+
+function M.edit_epic(epic)
+	compose({ epic = epic.id, cwd = epic.root, name = "epic " .. epic.title }, epic.title)
+end
+
+function M.finish(todo_id)
+	return change(todo_id, "finish", "", app.now())
+end
+
+function M.drop(todo_id)
+	return change(todo_id, "drop", app.now())
+end
+
+function M.drop_epic(epic)
+	repo.remove(app.store(), epic, app.now())
+end
+
+local documents = {
+	todo = function(id)
+		local t = M.todo(id)
+		return t and t:document(M.names(), app.now())
+	end,
+	epic = function(id)
+		local e = M.epic(id)
+		return e and e:document(M.names(), app.now())
+	end,
+}
+
+function M.document(entry)
+	local render = entry and documents[entry.kind]
+	return render and render(entry.id)
+end
+
+function M.request_send(ids, cwd)
+	app.update_view(function(v)
+		v:request_pick({ kind = "send_todo", todos = ids, cwd = cwd }, app.now())
+	end)
+	app.focus("conversation")
+end
+
+local function message(todos)
+	if #todos == 1 then
+		return todos[1]:message()
+	end
+	local parts = { "Work through these todos in order:" }
+	for _, t in ipairs(todos) do
+		table.insert(parts, t:message())
+	end
+	return table.concat(parts, "\n\n")
+end
+
+local function free(ids)
+	local list = {}
+	for _, id in ipairs(ids) do
+		local t = M.todo(id)
+		if t and t:is_free(app.now()) then
+			table.insert(list, t)
+		end
+	end
+	return list
+end
+
+local function what_of(todos)
+	return #todos == 1 and todos[1]:title() or (#todos .. " todos")
+end
+
+local function hand_over(todos, root, agent, launch)
+	local what = what_of(todos)
+	local assignee = agent and agent.id or app.models.Agent.new_id(math.random)
+	todos = vim.tbl_filter(function(t)
+		return change(t.id, "assign", assignee, app.now())
+	end, todos)
+	if #todos == 0 then
+		return vim.notify(what .. " was just sent from somewhere else", vim.log.levels.WARN)
+	end
+	local function sent(ok, id)
+		for _, t in ipairs(todos) do
+			if ok then
+				change(t.id, "send", id or assignee, app.now(), assignee)
+			else
+				change(t.id, "release", assignee, app.now())
+			end
+		end
+		if not ok then
+			return
+		end
+		if id then
+			local title = Todo.session_title(todos, function(epic_id)
+				local e = M.epic(epic_id)
+				return e and e.title
+			end)
+			app.store():update(app.models.Agent, id, function(a, created)
+				if created then
+					return false
+				end
+				a.title = title
+			end)
+			if not agent then
+				app.update_view(function(v)
+					return v:select(id)
+				end)
+			end
+		end
+		vim.notify("sent " .. what .. " to " .. (agent and agent:display_name() or "a new session"))
+	end
+	if agent then
+		runner.deliver(Draft.new({ agent = agent.id, cwd = agent.root or agent.cwd, name = agent:display_name() }, message(todos)), function(ok)
+			sent(ok, agent.id)
+		end)
+	else
+		runner.start(root, message(todos), sent, vim.tbl_extend("force", launch or {}, { id = assignee }))
+	end
+end
+
+local function nothing_free()
+	vim.notify("nothing left to send there, an agent already has it", vim.log.levels.WARN)
 end
 
 function M.send_picker(p, picker)
-	local todo = app.store():get(Todo, p.todo)
-	if not (todo and todo:is_listed()) then
-		return vim.notify("that todo is gone", vim.log.levels.WARN)
+	local todos = free(p.todos or { p.todo })
+	if #todos == 0 then
+		return nothing_free()
 	end
-	local agents = app.models.Agent.running_in(app.agents(), p.cwd or app.folder())
-	local entries = { { tag = "new", value = "new session", description = "start one with this todo right away" } }
-	for _, a in ipairs(agents) do
+	local root = p.cwd or todos[1].root
+	local entries = { { tag = "new", value = "new session", description = "start one with it right away" } }
+	for _, a in ipairs(app.models.Agent.running_in(app.agents(), root)) do
 		table.insert(entries, { tag = a:status(), value = a:display_name(), description = a.worktree or "", agent = a })
 	end
-	picker.pick(entries, { prompt = "send todo", header = "Enter sends it: " .. todo:title() }, function(choice)
-		local function sent(ok, id)
-			if ok then
-				update(todo.id, function(t, now)
-					return t:send(id, now)
-				end)
-				vim.notify("sent todo to " .. choice.value)
-			end
-		end
-		if choice.agent then
-			deliver(todo, choice.agent, function(ok)
-				sent(ok, choice.agent.id)
-			end)
-		else
-			runner.start(todo.root, todo:message(), function(ok, id)
-				sent(ok, id)
-			end)
-		end
+	picker.pick(entries, { prompt = "send", header = "Enter sends " .. what_of(todos) }, function(choice)
+		hand_over(todos, root, choice.agent)
 	end)
+end
+
+function M.start_new(ids, root, launch)
+	local todos = free(ids)
+	if #todos == 0 then
+		return nothing_free()
+	end
+	hand_over(todos, root or todos[1].root, nil, launch)
+end
+
+function M.titles(ids)
+	return what_of(vim.tbl_filter(function(t)
+		return t ~= nil
+	end, vim.tbl_map(M.todo, ids)))
 end
 
 return M

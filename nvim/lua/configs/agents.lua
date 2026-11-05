@@ -1,14 +1,14 @@
 local app = require("configs.app")
 local runner = require("configs.runner")
 local drafts = require("configs.drafts")
+local transcripts = require("configs.transcripts")
 local Agent = app.models.Agent
 local Session = app.models.Session
-
-local todos = require("configs.todos")
+local Thread = app.models.Thread
 
 local M = {}
 
-M.empty = "no active sessions"
+M.name = "session"
 
 local cache = {}
 
@@ -63,13 +63,10 @@ local function recent(folder, limit, done)
 end
 
 function M.card(e)
-	if e.todo then
-		return e.card
-	end
 	if not e.agent then
 		return e:card()
 	end
-	return e:card(require("configs.review").counts(e.agent.root))
+	return e:card(require("configs.review").counts(e.agent.root), require("configs.gitlab").get(e.agent.root), app.now())
 end
 
 local function sessions(folder, limit, done)
@@ -81,14 +78,65 @@ end
 function M.fetch(folder, done)
 	local view = app.view()
 	local list = Session.active(app.agents(), folder, app.now(), view.state == "draft" and view.draft or nil)
-	vim.list_extend(list, todos.entries(folder))
+	for _, e in ipairs(list) do
+		e.component = M
+	end
 	done(list)
 end
 
-function M.count(list)
-	return #vim.tbl_filter(function(e)
-		return not e.todo
-	end, list)
+function M.thread(e, ctx)
+	local names = {}
+	for _, a in ipairs(app.agents()) do
+		names[a.id] = a:display_name()
+	end
+	return Thread.new({
+		agent = e.agent,
+		id = e.id,
+		root = e.cwd,
+		now = app.now(),
+		log = ctx.log,
+		asks = vim.tbl_filter(function(a)
+			return not a:is_stale(app.now(), a.pid == nil or vim.uv.kill(a.pid, 0) == 0)
+		end, e.agent and e.agent:pending_asks() or {}),
+		transcript = transcripts.get(e.id),
+		draft = drafts.load({ agent = e.id }),
+		name_of = function(id, fallback)
+			return names[id] or fallback
+		end,
+	})
+end
+
+function M.follow(e, item)
+	if e.drafting then
+		return
+	end
+	local agent = { id = e.id, cwd = e.cwd, name = e.name }
+	if app.view():follow_item(agent, item) then
+		app.update_view(function(v)
+			return v:follow_item(agent, item)
+		end)
+	end
+end
+
+local function edit_in_flight(item, e)
+	runner.interrupt(e.agent)
+	local transcript = transcripts.get(e.id)
+	local last = transcript and transcript:turn(transcript:count())
+	drafts.write({ agent = e.id }, item.text or (last and last.prompt) or "")
+	drafts.compose({ agent = e.id, cwd = e.cwd, name = e.name })
+end
+
+function M.escape(e, item)
+	if not (item and e.agent) then
+		return false
+	elseif item.outbox then
+		runner.send_now(e.agent, item.outbox)
+		return true
+	elseif item.working or item.pending then
+		edit_in_flight(item, e)
+		return true
+	end
+	return false
 end
 
 local function warn(ui, why)
@@ -98,9 +146,7 @@ local function warn(ui, why)
 end
 
 function M.enter(e)
-	if e.todo then
-		return todos.send(e)
-	elseif e.drafting then
+	if e.drafting then
 		return drafts.compose(e:target())
 	end
 	app.update_view(function(v)
@@ -143,12 +189,30 @@ local function message(e)
 	drafts.compose(e:target())
 end
 
+local function continue_after_limit(e, ui)
+	local agent = app.agent(e.id)
+	local ok, why = e:can_continue(agent)
+	if not ok then
+		return warn(ui, why)
+	end
+	runner.continue(agent, function(sent)
+		if sent and not ui.batch then
+			vim.notify(e.name .. " continues")
+		end
+	end)
+end
+
 local pickers = {
 	new_session = function(p, picker)
 		runner.catalog(p.cwd, function(catalog)
+			local next_step = p.todos and ("it starts on " .. require("configs.todos").titles(p.todos)) or "write the task"
 			picker.pick(picker.flatten(catalog), { prompt = "new session", header = "Enter picks the model, then the mode" }, function(choice)
-				picker.pick(picker.modes("auto"), { prompt = "mode", header = "Enter picks it, then write the task" }, function(mode)
-					drafts.compose({ cwd = p.cwd, name = p.name, provider = choice.provider, model = choice.value, mode = mode.value })
+				picker.pick(picker.modes("auto"), { prompt = "mode", header = "Enter picks it, then " .. next_step }, function(mode)
+					local launch = { provider = choice.provider, model = choice.value, mode = mode.value }
+					if p.todos then
+						return require("configs.todos").start_new(p.todos, p.cwd, launch)
+					end
+					drafts.compose(vim.tbl_extend("force", { cwd = p.cwd, name = p.name }, launch))
 				end)
 			end)
 		end)
@@ -239,6 +303,10 @@ local function rename(e, ui)
 	end)
 end
 
+local function open_merge_request(e)
+	require("configs.gitlab").open(e.agent and e.agent.root or e.cwd)
+end
+
 local function remove(e, ui)
 	local plan, why = e:removal(vim.fn.glob(app.paths.claude_projects .. "/*/" .. e.id .. ".jsonl"))
 	if not plan then
@@ -265,7 +333,7 @@ local function remove(e, ui)
 end
 
 local search_limit = 200
-local tone_colors = { busy = "#A58BD3", ok = "#77DD77", bad = "#E0955A", off = "#8C8C8C" }
+local tone_colors = { busy = "#A58BD3", ok = "#77DD77", bad = "#E0955A", off = "#8C8C8C", limit = "#E06C75" }
 
 local search_actions = {
 	{ key = "enter", label = "go there or resume", run = M.enter },
@@ -325,28 +393,18 @@ function M.find()
 	end)
 end
 
-local function either(on_session, on_todo)
-	return function(e, ui)
-		local fn = e.todo and on_todo or not e.todo and on_session
-		if not fn then
-			return warn(ui, e.todo and "that's a todo, not a session" or "that's a session, not a todo")
-		end
-		return fn(e, ui)
-	end
-end
-
 M.groups = {
 	{ "<leader>a", "agent" },
 	{ "<leader>o", "options" },
-	{ "<leader>t", "todo" },
 }
 
 M.actions = {
 	{
 		"<leader>aa",
-		function(_, ui)
-			local folder = ui.folder()
-			request_pick({ kind = "new_session", cwd = folder, name = app.short(folder) })
+		function(e, ui, item)
+			local todo = item and item.todo
+			local folder = todo and e.epic and e.epic.root or ui.folder()
+			request_pick({ kind = "new_session", cwd = folder, name = app.short(folder), todos = todo and { todo.id } or nil })
 		end,
 		"new session",
 		always = true,
@@ -362,19 +420,16 @@ M.actions = {
 		"find a session",
 		always = true,
 	},
-	{ "<leader>as", either(toggle), "resume or end" },
-	{ "<leader>am", either(message), "message", single = true },
-	{ "<leader>ai", either(interrupt), "interrupt" },
-	{ "<leader>ar", either(rename), "rename", single = true },
-	{ "<leader>au", either(move_to_sdk), "move to the sdk" },
-	{ "<leader>ad", either(remove), "delete" },
-	{ "<leader>om", either(switch_model), "model", single = true },
-	{ "<leader>op", either(switch_mode), "permission mode", single = true },
-	{ "<leader>ta", todos.add, "add", always = true },
-	{ "<leader>ts", either(nil, todos.send), "send", single = true },
-	{ "<leader>te", either(nil, todos.edit), "edit", single = true },
-	{ "<leader>tc", either(nil, todos.finish), "complete" },
-	{ "<leader>td", either(nil, todos.drop), "drop" },
+	{ "<leader>as", toggle, "resume or end" },
+	{ "<leader>am", message, "message", single = true },
+	{ "<leader>ai", interrupt, "interrupt" },
+	{ "<leader>ac", continue_after_limit, "continue after a usage limit" },
+	{ "<leader>ar", rename, "rename", single = true },
+	{ "<leader>au", move_to_sdk, "move to the sdk" },
+	{ "<leader>ad", remove, "delete" },
+	{ "<leader>ao", open_merge_request, "open merge request", single = true },
+	{ "<leader>om", switch_model, "model", single = true },
+	{ "<leader>op", switch_mode, "permission mode", single = true },
 }
 
 local function registry()

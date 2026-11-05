@@ -19,6 +19,34 @@ if ok_codediff then
 		end
 	end
 
+	local badges = {
+		{ "draft", "ReviewNoteSign" },
+		{ "sent", "ReviewSentSign" },
+		{ "resolved", "ReviewResolvedSign" },
+	}
+	local seen_marks = { done = "DiffSeenDone", partly = "DiffSeenPartly", changed = "DiffSeenChanged" }
+	local function with_comments(format)
+		return function(ctx)
+			local row = format(ctx)
+			local seen = vim.t.git_view_root and require("configs.diff_progress").badge(vim.t.git_view_root, ctx.path)
+			if seen then
+				table.insert(row.right, 1, { segments = { { text = seen[1] .. " ", hl = seen_marks[seen[2]] } }, truncate_priority = 5 })
+			end
+			local ok, review = pcall(require, "configs.review")
+			local n = ok and vim.t.git_view_root and review.file_counts(vim.t.git_view_root)[ctx.path]
+			if n then
+				local segments = {}
+				for _, b in ipairs(badges) do
+					if n[b[1]] > 0 then
+						table.insert(segments, { text = "● " .. n[b[1]] .. " ", hl = b[2] })
+					end
+				end
+				table.insert(row.right, 1, { segments = segments, truncate_priority = 4 })
+			end
+			return row
+		end
+	end
+
 	-- Line colors come from DiffAdd/DiffDelete (packs.theme); characters get a stronger tint.
 	codediff.setup({
 		highlights = {
@@ -40,7 +68,7 @@ if ok_codediff then
 			view_mode = "tree",
 			indent_markers = false,
 			formatters = {
-				file = oil_icons(formatters.file),
+				file = with_comments(oil_icons(formatters.file)),
 				folder = oil_icons(formatters.folder),
 			},
 			width = require("workspace.models.workspace").panel_width(vim.o.columns),
@@ -90,16 +118,40 @@ if ok_codediff then
 	end
 	local render = require("codediff.ui.view.render")
 	local scrollbind = render.establish_scrollbind
-	render.establish_scrollbind = function(orig_win, mod_win, ...)
-		scrollbind(orig_win, mod_win, ...)
+	render.establish_scrollbind = function(orig_win, mod_win, orig_buf, mod_buf, lines_diff, orig_cursor, mod_cursor)
+		orig_cursor, mod_cursor = require("configs.diff_progress").landing(mod_win, lines_diff, orig_cursor, mod_cursor)
+		scrollbind(orig_win, mod_win, orig_buf, mod_buf, lines_diff, orig_cursor, mod_cursor)
 		wrap(orig_win)
 		wrap(mod_win)
+	end
+	local function track(tabpage)
+		vim.schedule(function()
+			local ok, err = pcall(require("configs.diff_progress").rendered, tabpage)
+			if not ok then
+				vim.notify_once("diff progress: " .. tostring(err), vim.log.levels.WARN)
+			end
+		end)
+	end
+	local update = render.update
+	render.update = function(session, ...)
+		local result = update(session, ...)
+		track(session.tabpage)
+		return result
+	end
+	local refresh = require("codediff.ui.refresh")
+	local ready = refresh.ready
+	refresh.ready = function(tabpage, ...)
+		local result = ready(tabpage, ...)
+		track(tabpage)
+		return result
 	end
 	local inline = require("codediff.ui.view.inline_view.render")
 	local render_inline = inline.compute_and_render_inline
 	inline.compute_and_render_inline = function(...)
 		local result = render_inline(...)
-		wrap(select(7, ...))
+		local win = select(7, ...)
+		wrap(win)
+		require("configs.diff_progress").land_inline(win)
 		return result
 	end
 end
@@ -310,7 +362,22 @@ vim.api.nvim_create_autocmd("User", {
 			vim.t[tab].git_view, vim.t[tab].git_view_root = "codediff", session.git_root
 			vim.t[tab].git_view_branch = opening_branch
 			M.refresh_info(tab)
+			require("configs.diff_progress").restore(tab, session.git_root, M.show_in_diff)
 		end
+	end,
+})
+vim.api.nvim_create_autocmd("CursorMoved", {
+	group = group,
+	callback = function()
+		if vim.t.git_view == "codediff" then
+			require("configs.diff_progress").moved()
+		end
+	end,
+})
+vim.api.nvim_create_autocmd("VimLeavePre", {
+	group = group,
+	callback = function()
+		require("configs.diff_progress").flush()
 	end,
 })
 -- Recorded once the status buffer is shown: its filetype is set before Neogit opens its tab.
@@ -673,11 +740,62 @@ function M.step_hunk(direction)
 	return true
 end
 
+function M.show_in_diff(path, line)
+	local lifecycle = require("codediff.ui.lifecycle")
+	local tab = vim.api.nvim_get_current_tabpage()
+	local session, panel = lifecycle.get_session(tab), lifecycle.get_panel(tab)
+	local explorer = panel and panel.view
+	if not (session and explorer and explorer.tree) then
+		return false
+	end
+	local file_node
+	for _, file in ipairs(require("codediff.ui.explorer.tree").get_all_files(explorer.tree)) do
+		if file.data.path == path and not file_node then
+			file_node = file
+		end
+	end
+	if not file_node then
+		return false
+	end
+	explorer.on_file_select(file_node.data)
+	local tries = 0
+	local function land()
+		local s = lifecycle.get_session(tab)
+		local win = s and s.modified_win
+		local buf = win and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win)
+		if buf and vim.api.nvim_buf_get_name(buf):sub(-#path) == path then
+			vim.api.nvim_set_current_win(win)
+			vim.api.nvim_win_set_cursor(win, { math.min(line, vim.api.nvim_buf_line_count(buf)), 0 })
+			return vim.cmd("normal! zz")
+		end
+		tries = tries + 1
+		if tries < 30 then
+			vim.defer_fn(land, 50)
+		end
+	end
+	land()
+	return true
+end
+
+vim.api.nvim_create_autocmd("User", {
+	group = group,
+	pattern = "ReviewChanged",
+	callback = function()
+		local ok, lifecycle = pcall(require, "codediff.ui.lifecycle")
+		local panel = ok and lifecycle.get_panel(vim.api.nvim_get_current_tabpage())
+		local tree = panel and panel.view and panel.view.tree
+		if tree then
+			pcall(tree.render, tree)
+		end
+	end,
+})
+
 -- Closing the last git view leaves an empty buffer; show the last used file of the project instead.
 vim.api.nvim_create_autocmd("User", {
 	group = group,
 	pattern = "CodeDiffClose",
-	callback = function()
+	callback = function(ev)
+		require("configs.diff_progress").closed(ev.data and ev.data.tabpage)
 		vim.schedule(function()
 			local buf = vim.api.nvim_get_current_buf()
 			local empty = vim.api.nvim_buf_get_name(buf) == "" and vim.bo[buf].buftype == ""

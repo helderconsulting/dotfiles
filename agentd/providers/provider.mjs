@@ -12,7 +12,7 @@ export class Provider {
 	}
 
 	open(_options) {
-		throw abstract(this, "open({ cwd, prompt, model, mode, resume, host })");
+		throw abstract(this, "open({ id, cwd, prompt, model, mode, resume, host })");
 	}
 }
 
@@ -24,6 +24,7 @@ export class Session {
 		this.model = model;
 		this.mode = mode;
 		this.busy = false;
+		this.limited = null;
 		this.context = null;
 		this.host = host;
 	}
@@ -58,6 +59,21 @@ export class Session {
 
 	stop() {
 		throw abstract(this, "stop()");
+	}
+
+	setBusy(busy) {
+		const lifted = busy && this.limited !== null;
+		if (this.busy === busy && !lifted) return;
+		this.busy = busy;
+		if (lifted) this.limited = null;
+		this.changed();
+	}
+
+	limit({ resets_at = null, window = null } = {}) {
+		this.limited = { resets_at, window };
+		this.busy = false;
+		this.changed();
+		this.report("limit", this.limited);
 	}
 
 	report(event, fields = {}) {

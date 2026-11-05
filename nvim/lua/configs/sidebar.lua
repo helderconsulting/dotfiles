@@ -1,16 +1,12 @@
 local app = require("configs.app")
 local cards = require("configs.cards")
-local agents = require("configs.agents")
-local transcripts = require("configs.transcripts")
-local drafts = require("configs.drafts")
-local runner = require("configs.runner")
-local Thread = app.models.Thread
+local board = require("configs.board")
 
 local M = {}
 
 local page = 10
 local sections = {
-	{ name = "agents", list = agents, multi = true },
+	{ name = "agents", list = board, multi = true },
 }
 local state = { section = 1, entries = {}, current = {}, marked = {}, thread = nil, thread_current = nil, in_thread = false, threads_shown = true }
 local buf, win
@@ -52,28 +48,10 @@ local function thread_index()
 end
 
 local function build_thread(e)
-	if not (e and not e.todo and state.threads_shown and section().name == "agents") then
+	if not (e and state.threads_shown and section().list.thread) then
 		return nil
 	end
-	local names = {}
-	for _, a in ipairs(app.agents()) do
-		names[a.id] = a:display_name()
-	end
-	return Thread.new({
-		agent = e.agent,
-		id = e.id,
-		root = e.cwd,
-		now = app.now(),
-		log = log,
-		asks = vim.tbl_filter(function(a)
-			return not a:is_stale(app.now(), a.pid == nil or vim.uv.kill(a.pid, 0) == 0)
-		end, e.agent and e.agent:pending_asks() or {}),
-		transcript = transcripts.get(e.id),
-		draft = drafts.load({ agent = e.id }),
-		name_of = function(id, fallback)
-			return names[id] or fallback
-		end,
-	})
+	return section().list.thread(e, { log = log })
 end
 
 local function report_sections()
@@ -91,25 +69,14 @@ local function report_sections()
 	end
 end
 
+local function selected_item()
+	return state.in_thread and thread_items()[thread_index() or 0] or nil
+end
+
 local function follow_selection()
-	local e = section().name == "agents" and current_entry() or nil
-	if not e or e.drafting then
-		return
-	end
-	if e.todo then
-		if app.view():show_todo(e.id) then
-			app.update_view(function(v)
-				return v:show_todo(e.id)
-			end)
-		end
-		return
-	end
-	local item = state.in_thread and thread_items()[thread_index() or 0] or nil
-	local agent = { id = e.id, cwd = e.cwd, name = e.name }
-	if app.view():follow_item(agent, item) then
-		app.update_view(function(v)
-			return v:follow_item(agent, item)
-		end)
+	local e = current_entry()
+	if e and section().list.follow then
+		section().list.follow(e, selected_item())
 	end
 end
 
@@ -278,7 +245,7 @@ local function set_actions()
 			end
 			local e = current_entry()
 			if e or a.always then
-				a[2](e, view)
+				a[2](e, view, selected_item())
 			end
 		end, { buffer = buf, desc = a[3], nowait = true })
 	end
@@ -286,21 +253,6 @@ local function set_actions()
 	if ok and wk_buf.clear then
 		pcall(wk_buf.clear, { buf = buf })
 	end
-end
-
-local function edit_in_flight(item, e)
-	runner.interrupt(e.agent)
-	local transcript = transcripts.get(e.id)
-	local last = transcript and transcript:turn(transcript:count())
-	local text = item.text or (last and last.prompt) or ""
-	local file = drafts.file({ agent = e.id })
-	vim.fn.mkdir(vim.fs.dirname(file), "p")
-	local f = io.open(file, "w")
-	if f then
-		f:write(text)
-		f:close()
-	end
-	drafts.compose({ agent = e.id, cwd = e.cwd, name = e.name })
 end
 
 local function keymaps(b)
@@ -396,12 +348,10 @@ local function keymaps(b)
 		toggle_mark(-1)
 	end, "mark and previous")
 	map("<Esc>", function()
-		local item = state.in_thread and thread_items()[thread_index() or 0]
+		local item = selected_item()
 		local e = current_entry()
-		if item and item.outbox and e and e.agent then
-			return runner.send_now(e.agent, item.outbox)
-		elseif item and (item.working or item.pending) and e and e.agent then
-			return edit_in_flight(item, e)
+		if item and e and section().list.escape and section().list.escape(e, item) then
+			return
 		end
 		state.marked[section().name] = nil
 		state.in_thread = false
@@ -460,9 +410,10 @@ function M.open()
 	vim.bo[buf].bufhidden = "hide"
 	vim.bo[buf].swapfile = false
 	vim.bo[buf].modifiable = false
-	for option, value in pairs({ number = false, relativenumber = false, signcolumn = "no", foldcolumn = "0", statuscolumn = "", cursorline = false, list = false, spell = false, wrap = false, scrolloff = 0 }) do
+	for option, value in pairs({ number = false, relativenumber = false, signcolumn = "no", foldcolumn = "0", statuscolumn = "", cursorline = false, list = false, spell = false, wrap = false, scrolloff = 0, sidescrolloff = 0 }) do
 		vim.wo[win][option] = value
 	end
+	vim.o.mousescroll = "ver:3,hor:0"
 	vim.o.guicursor = "n-v-sm:block-CardCursor,i-c-ci-ve:ver25,r-cr-o:hor20"
 	keymaps(buf)
 	set_actions()
@@ -496,6 +447,16 @@ function M.open()
 			render()
 		end,
 	})
+	vim.api.nvim_create_autocmd("WinScrolled", {
+		group = group,
+		callback = function()
+			if vim.api.nvim_win_is_valid(win) and vim.fn.getwininfo(win)[1].leftcol > 0 then
+				vim.api.nvim_win_call(win, function()
+					vim.fn.winrestview({ leftcol = 0 })
+				end)
+			end
+		end,
+	})
 	vim.api.nvim_create_autocmd("VimResized", {
 		group = group,
 		callback = function()
@@ -511,8 +472,10 @@ function M.open()
 	app.on("agents", refresh)
 	app.on("runtimes", refresh)
 	app.on("todos", refresh)
+	app.on("epics", refresh)
 	app.on("usage", refresh)
 	app.on("reviews", render)
+	app.on("merge_requests", render)
 	app.on("asks", function()
 		follow_ask(app.view())
 		render()
@@ -525,7 +488,8 @@ function M.open()
 	app.on("views", follow_view)
 
 	refresh()
-	agents.watch_registry()
+	require("configs.agents").watch_registry()
+	require("configs.gitlab").watch()
 	vim.uv.new_timer():start(5000, 5000, vim.schedule_wrap(function()
 		for _, e in ipairs(state.entries.agents or {}) do
 			if e.agent and e.agent:is_busy() then

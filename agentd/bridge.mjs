@@ -12,14 +12,17 @@ export class Bridge {
 	#exits = [];
 	#closing = false;
 	#onState;
+	#retryAfter;
+	#retry = null;
 	state = "up";
 
-	constructor({ command, args, env, log, onState = () => {} }) {
+	constructor({ command, args, env, log, onState = () => {}, retryAfter = 60000 }) {
 		this.#command = command;
 		this.#args = args;
 		this.#env = env;
 		this.#log = log;
 		this.#onState = onState;
+		this.#retryAfter = retryAfter;
 		this.#spawn();
 	}
 
@@ -49,8 +52,16 @@ export class Bridge {
 		this.#exits = [...this.#exits.filter((t) => now - t < 10000), now];
 		this.#log("bridge.exit", { code, restarts: this.#exits.length });
 		if (this.#exits.length >= 3) {
-			this.#log("bridge.gave_up");
-			return this.#setState("failed");
+			this.#log("bridge.gave_up", { retry_in: this.#retryAfter });
+			this.#setState("failed");
+			this.#retry = setTimeout(() => {
+				this.#retry = null;
+				this.#exits = [];
+				this.#log("bridge.retry");
+				this.#spawn();
+			}, this.#retryAfter);
+			this.#retry.unref?.();
+			return;
 		}
 		this.#setState("lost");
 		this.#spawn();
@@ -99,6 +110,8 @@ export class Bridge {
 
 	close() {
 		this.#closing = true;
+		clearTimeout(this.#retry);
+		this.#retry = null;
 		this.#child?.stdin.end();
 	}
 }

@@ -6,8 +6,8 @@ export class FakeSession extends Session {
 	#done;
 	#started;
 
-	constructor({ cwd, prompt, model, mode, resume, host, refuse }) {
-		super({ id: resume ?? `s${++FakeSession.count}`, provider: "fake", cwd, model, mode: mode ?? "auto", host });
+	constructor({ id, cwd, prompt, model, mode, resume, host, refuse }) {
+		super({ id: resume ?? id ?? `s${++FakeSession.count}`, provider: "fake", cwd, model, mode: mode ?? "auto", host });
 		this.sent = prompt ? [prompt] : [];
 		this.interrupted = 0;
 		this.stopped = false;
@@ -54,8 +54,7 @@ export class FakeSession extends Session {
 	}
 
 	work(busy) {
-		this.busy = busy;
-		this.changed();
+		this.setBusy(busy);
 	}
 }
 
@@ -104,7 +103,7 @@ export class FakeStore {
 	}
 
 	save(s) {
-		this.entries[s.id] = { provider: s.provider, cwd: s.cwd, model: s.model, mode: s.mode, busy: s.busy };
+		this.entries[s.id] = { provider: s.provider, cwd: s.cwd, model: s.model, mode: s.mode, busy: s.busy, ...(s.limited ? { limited: s.limited } : {}) };
 	}
 
 	forget(id) {

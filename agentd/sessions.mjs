@@ -19,7 +19,7 @@ export class SessionStore {
 	}
 
 	save(session) {
-		this.#entries[session.id] = { provider: session.provider, cwd: session.cwd, model: session.model, mode: session.mode, busy: session.busy };
+		this.#entries[session.id] = { provider: session.provider, cwd: session.cwd, model: session.model, mode: session.mode, busy: session.busy, ...(session.limited ? { limited: session.limited } : {}) };
 		this.#write();
 	}
 

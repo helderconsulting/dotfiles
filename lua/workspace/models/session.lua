@@ -80,7 +80,7 @@ function Session:place()
 	return self.agent and self.agent.worktree or format.basename(self.cwd)
 end
 
-function Session:card(review)
+function Session:card(review, merge_request, now)
 	local word = self.word
 	if review and review.sent > 0 then
 		word = word .. " · " .. review.sent .. " open"
@@ -95,7 +95,12 @@ function Session:card(review)
 	if self.running and self.agent and self.agent:uses_extra() then
 		place = place .. " · extra usage"
 	end
-	return { self.name, place, word, self:meter() }
+	local card = { self.name, place, word }
+	for _, line in ipairs(merge_request and merge_request:card_lines(now or os.time()) or {}) do
+		table.insert(card, line)
+	end
+	card[#card + 1] = self:meter()
+	return card
 end
 
 function Session:can_move()
@@ -168,6 +173,14 @@ function Session:can_interrupt(agent)
 		return false, self.name .. " isn't working"
 	end
 	return true
+end
+
+function Session:can_continue(agent)
+	agent = agent or self.agent
+	if not (agent and agent:is_running()) then
+		return false, self.name .. " isn't running"
+	end
+	return agent:can_continue()
 end
 
 function Session:removal(found)

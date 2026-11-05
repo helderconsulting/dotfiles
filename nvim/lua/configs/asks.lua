@@ -84,12 +84,12 @@ local function rows(win)
 end
 
 local function new_buffer(name)
-	local old = vim.fn.bufnr(name)
-	if old ~= -1 then
-		pcall(vim.api.nvim_buf_delete, old, { force = true })
-	end
 	local buf = vim.api.nvim_create_buf(false, true)
 	vim.bo[buf].bufhidden = "wipe"
+	local old = vim.fn.bufnr("^" .. vim.fn.escape(name, "\\[]*?~.") .. "$")
+	if old ~= -1 then
+		require("configs.bufs").wipe(old, buf)
+	end
 	vim.api.nvim_buf_set_name(buf, name)
 	return buf
 end

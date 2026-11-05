@@ -9,6 +9,10 @@ function Model.extend(spec)
 	cls.kind = spec.kind
 	cls.machine = spec.machine and machine.define(spec.machine)
 	cls.fields = spec.fields
+	cls.known = {}
+	for _, f in ipairs(spec.fields or {}) do
+		cls.known[f] = true
+	end
 	return cls
 end
 
@@ -17,7 +21,13 @@ function Model.new(cls, data)
 	for _, f in ipairs(cls.fields) do
 		self[f] = data and data[f]
 	end
-	if cls.machine and self.state == nil then
+	self._extra = {}
+	for k, v in pairs(data or {}) do
+		if type(k) == "string" and not cls.known[k] then
+			self._extra[k] = v
+		end
+	end
+	if cls.machine and (self.state == nil or not machine.knows(cls.machine, self.state)) then
 		self.state = cls.machine.initial
 	end
 	self._transitions = {}
@@ -51,6 +61,9 @@ end
 
 function Model:to_table()
 	local out = {}
+	for k, v in pairs(self._extra or {}) do
+		out[k] = v
+	end
 	for _, f in ipairs(self.fields) do
 		local v = self[f]
 		if type(v) == "table" and v.to_table then

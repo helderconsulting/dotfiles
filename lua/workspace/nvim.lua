@@ -140,7 +140,15 @@ function M.locate(cwd)
 		branch = git("rev-parse", "--short", "HEAD")
 	end
 	local dir, common = git("rev-parse", "--path-format=absolute", "--git-dir"), git("rev-parse", "--path-format=absolute", "--git-common-dir")
-	return { cwd = cwd, root = root, branch = branch, worktree = dir ~= common and vim.fs.basename(root) or nil }
+	local repo = common and vim.fs.basename(common) == ".git" and vim.fs.dirname(common) or root
+	return { cwd = cwd, root = root, repo = repo, branch = branch, worktree = dir ~= common and vim.fs.basename(root) or nil }
+end
+
+function M.repo_root(path)
+	if not (path and vim.uv.fs_stat(path)) then
+		return path
+	end
+	return M.locate(path).repo
 end
 
 function M.code_tree(root)

@@ -167,13 +167,10 @@ function M.pending_buffer(text)
 	return buf
 end
 
-function M.todo_buffer(todo, card)
-	local buf = scratch("answer://todo")
-	local lines = { "", "  " .. card[2] .. " · " .. card[3], "" }
-	vim.list_extend(lines, vim.split(todo.text or "", "\n"))
-	if todo.note then
-		vim.list_extend(lines, { "", "  done: " .. todo.note })
-	end
+function M.entry_buffer(doc)
+	local buf = scratch("answer://entry")
+	local lines = { "", "  " .. doc.header, "" }
+	vim.list_extend(lines, doc.lines)
 	fill(buf, lines, #lines, {})
 	return buf
 end

@@ -3,15 +3,16 @@ local format = require("workspace.format")
 
 local Agent = Model.extend({
 	kind = "agents",
-	fields = { "id", "state", "cwd", "root", "branch", "worktree", "title", "name", "pid", "pane", "read_at", "activity", "sending", "outbox", "updated", "doing", "host", "prompt" },
+	fields = { "id", "state", "cwd", "root", "branch", "worktree", "title", "name", "pid", "pane", "read_at", "activity", "sending", "outbox", "updated", "doing", "host", "prompt", "limit" },
 	machine = {
 		initial = "starting",
 		states = {
-			starting = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting", stop = "done" },
-			idle = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting", stop = "done" },
-			working = { prompt = "working", tool = "working", ask = "waiting", stop = "done", settle = "idle" },
-			waiting = { ask = "waiting", answer = "working", prompt = "working", tool = "working", work = "working", stop = "done", settle = "idle" },
-			done = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting" },
+			starting = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting", stop = "done", limit = "limited" },
+			idle = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting", stop = "done", limit = "limited" },
+			working = { prompt = "working", tool = "working", ask = "waiting", stop = "done", settle = "idle", limit = "limited" },
+			waiting = { ask = "waiting", answer = "working", prompt = "working", tool = "working", work = "working", stop = "done", settle = "idle", limit = "limited" },
+			done = { start = "idle", prompt = "working", tool = "working", work = "working", ask = "waiting", limit = "limited" },
+			limited = { limit = "limited", start = "limited", stop = "limited", settle = "limited", resume = "working", prompt = "working", tool = "working", work = "working", ask = "waiting" },
 			stopped = { start = "idle", prompt = "working", tool = "working" },
 		},
 		any = { ["end"] = "stopped" },
@@ -19,6 +20,17 @@ local Agent = Model.extend({
 })
 
 Agent.settle_after = 3
+
+function Agent.new_id(random)
+	local hex = function(n)
+		local out = {}
+		for i = 1, n do
+			out[i] = ("%x"):format(random(0, 15))
+		end
+		return table.concat(out)
+	end
+	return ("%s-%s-4%s-%x%s-%s"):format(hex(8), hex(4), hex(3), random(8, 11), hex(3), hex(12))
+end
 
 local relocating = { start = true, prompt = true, stop = true }
 
@@ -66,6 +78,7 @@ local tones = {
 	waiting = "bad",
 	done = "ok",
 	stopped = "off",
+	limited = "limit",
 }
 
 local noteworthy = { stop = true }
@@ -97,10 +110,17 @@ function Agent:note_tool(hook, tool, input, at)
 	self.doing = { label = Agent.describe_tool(tool, input), at = at, running = running or nil }
 end
 
+local progress = {}
+
 function Agent:progress(now)
-	if self.state ~= "working" then
+	local describe = progress[self.state]
+	if not describe then
 		return nil
 	end
+	return describe(self, now)
+end
+
+function progress.working(self, now)
 	local d = self.doing
 	if d and d.running then
 		return d.label .. " · " .. format.duration(now - d.at)
@@ -110,6 +130,49 @@ function Agent:progress(now)
 		return "quiet for " .. format.duration(quiet), "bad"
 	end
 	return (d and ("last " .. d.label) or "thinking") .. " · " .. format.duration(quiet)
+end
+
+function progress.limited(self, now)
+	local l = self.limit or {}
+	if not l.resets_at then
+		return nil
+	end
+	local window = l.window and (l.window .. " ") or ""
+	if l.resets_at > now then
+		return window .. "resets " .. format.clock(l.resets_at, now) .. " · in " .. format.duration(l.resets_at - now)
+	end
+	return window .. "reset " .. format.clock(l.resets_at, now) .. " · continuing"
+end
+
+local reports = {
+	limit = function(self, report, at)
+		local fresh = self.state ~= "limited"
+		self.limit = { resets_at = report.resets_at, window = report.window }
+		local moved = self:apply("limit", at)
+		if moved and fresh then
+			self.activity = at
+		end
+		return moved
+	end,
+}
+
+function Agent.observes(report)
+	return reports[report.event] ~= nil
+end
+
+function Agent:observe(report, at)
+	return reports[report.event](self, report, at)
+end
+
+function Agent:can_continue()
+	if not self:can("resume") then
+		return false, self:display_name() .. " isn't stopped on a usage limit"
+	end
+	return true
+end
+
+function Agent:continue(at)
+	return self:can("resume") and self:apply("resume", at)
 end
 
 function Agent:apply(event, at)
@@ -126,7 +189,11 @@ function Agent:apply(event, at)
 	if noteworthy[event] then
 		self.activity = at
 	end
-	return self:transition(event, at)
+	local moved = self:transition(event, at)
+	if self.state ~= "limited" then
+		self.limit = nil
+	end
+	return moved
 end
 
 function Agent:locate(place)
@@ -154,6 +221,10 @@ function Agent:channel()
 		return "sdk"
 	end
 	return self.pane and "pane" or "attach"
+end
+
+function Agent:wants_resume()
+	return not self:is_running() or (self:is_hosted() and not self:on_sdk())
 end
 
 function Agent:on_cli()
@@ -323,7 +394,7 @@ function Agent:status()
 	return self.state, tones[self.state] or "ok"
 end
 
-local urgency = { waiting = 5, working = 4, starting = 3, done = 2, idle = 1, stopped = 0 }
+local urgency = { waiting = 6, limited = 5, working = 4, starting = 3, done = 2, idle = 1, stopped = 0 }
 
 function Agent.most_pressing(list)
 	local top, rank
@@ -348,7 +419,7 @@ end
 local registry = {
 	busy = { event = "work", states = { working = true, starting = true } },
 	waiting = { event = "ask", states = { waiting = true } },
-	idle = { event = "settle", states = { idle = true, done = true, starting = true }, delay = Agent.settle_after },
+	idle = { event = "settle", states = { idle = true, done = true, starting = true, limited = true }, delay = Agent.settle_after },
 }
 
 function Agent:in_sync(entry)

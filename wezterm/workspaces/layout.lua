@@ -1,5 +1,6 @@
 local wezterm = require("wezterm")
 local log = require("workspaces.store").log
+local Workspace = require("workspaces.store").models.Workspace
 
 local M = {}
 
@@ -43,6 +44,16 @@ local function info(tab)
 	return by_id, total, rows
 end
 
+local function split(w, role, pane, opts)
+	local ok, made = pcall(pane.split, pane, with(spawn(w, role), opts))
+	if not ok then
+		log.error("layout.split.failed", { workspace = w.id, role = role, pane = pane:pane_id(), size = opts.size, error = tostring(made) })
+		return nil
+	end
+	w:set_pane(role, made:pane_id())
+	return made
+end
+
 function M.ensure(tab, w)
 	local panes, total, rows = info(tab)
 	local function alive(id)
@@ -64,19 +75,26 @@ function M.ensure(tab, w)
 		for _, p in pairs(panes) do
 			corner = (p.left == 0 and p.top == 0) and p or corner
 		end
-		local sidebar = corner.pane:split(with(spawn(w, "sidebar"), { direction = "Left", size = size, top_level = corner.height ~= rows }))
-		w:set_pane("sidebar", sidebar:pane_id())
-		panes = info(tab)
+		local fits = corner and Workspace.fit(size, corner.width, Workspace.sizes.editor.min, Workspace.sizes.sidebar.min)
+		if fits then
+			split(w, "sidebar", corner.pane, { direction = "Left", size = fits, top_level = corner.height ~= rows })
+			panes = info(tab)
+		else
+			log.warn("layout.no_room", { workspace = w.id, role = "sidebar", want = size, room = corner and corner.width })
+		end
 	end
 	local sidebar = panes[w:pane("sidebar") or -1]
 	if missing.conversation and widths.conversation and sidebar then
 		local room = sidebar.width - widths.sidebar - 1
-		local conversation = sidebar.pane:split(with(spawn(w, "conversation"), { direction = "Right", size = room > 0 and room or widths.conversation }))
-		w:set_pane("conversation", conversation:pane_id())
+		local fits = Workspace.fit(room > 0 and room or widths.conversation, sidebar.width, Workspace.sizes.sidebar.min, Workspace.sizes.conversation.min)
+		if fits then
+			split(w, "conversation", sidebar.pane, { direction = "Right", size = fits })
+		else
+			log.warn("layout.no_room", { workspace = w.id, role = "conversation", room = sidebar.width })
+		end
 	end
 	if missing.docker and w:wants("docker") then
-		local docker = editor.pane:split(with(spawn(w, "docker"), { direction = "Bottom", size = w.docker_share(rows) }))
-		w:set_pane("docker", docker:pane_id())
+		split(w, "docker", editor.pane, { direction = "Bottom", size = w.docker_share(rows) })
 	end
 	editor.pane:activate()
 end

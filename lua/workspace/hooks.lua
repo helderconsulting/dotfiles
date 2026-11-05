@@ -1,6 +1,6 @@
 local nvim = require("workspace.nvim")
 local models = require("workspace.models")
-local Agent, Ask, Review = models.Agent, models.Ask, models.Review
+local Agent, Ask, Review, MergeRequest = models.Agent, models.Ask, models.Review, models.MergeRequest
 
 local M = {}
 
@@ -87,7 +87,7 @@ local function track(s, payload, ctx)
 				a:locate(place or { cwd = payload.cwd })
 			end
 			a:bind_pane(ctx.pane or "", ctx.background)
-			a.host = ctx.host or a.host
+			a.host = ctx.host
 			a:note_tool(payload.hook_event_name, payload.tool_name, payload.tool_input, nvim.clock())
 			if event == "prompt" then
 				a:begin_turn(payload.prompt, nvim.clock())
@@ -106,6 +106,12 @@ function M.handle(s, payload, ctx)
 		return nil
 	end
 	track(s, payload, ctx)
+	if MergeRequest.pokes(payload) then
+		local root = nvim.locate(payload.cwd or vim.uv.cwd()).root
+		s:update(MergeRequest, MergeRequest.key(root), function(m)
+			return m:poke(root)
+		end)
+	end
 	if Review.guards(payload) then
 		local review, root, place = review_at(s, payload.cwd)
 		return review:guard(payload, guard_context(root, place), M.review_command)

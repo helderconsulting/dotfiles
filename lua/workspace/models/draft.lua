@@ -5,9 +5,16 @@ function Draft.new(target, text, images, mtime, created)
 	return setmetatable({ target = target, text = text or "", images = images or {}, mtime = mtime, created = created }, Draft)
 end
 
+local function folder_key(target)
+	return (target.cwd or ""):gsub("[^%w]", "-")
+end
+
 function Draft.key(target)
+	if target.epic then
+		return "epic-" .. (target.epic == true and folder_key(target) or target.epic)
+	end
 	if target.todo then
-		return "todo-" .. (target.todo == true and (target.cwd or ""):gsub("[^%w]", "-") or target.todo)
+		return "todo-" .. (target.todo == true and (target.in_epic or folder_key(target)) or target.todo)
 	end
 	if target.agent then
 		return target.agent
@@ -16,7 +23,7 @@ function Draft.key(target)
 end
 
 function Draft.starts_session(target)
-	return target ~= nil and not target.agent and not target.todo
+	return target ~= nil and not target.agent and not target.todo and not target.epic
 end
 
 function Draft:is_empty()
@@ -60,7 +67,9 @@ function Draft:with_review(prompt)
 end
 
 function Draft:delivery(agent)
-	if self.target.todo then
+	if self.target.epic then
+		return "epic"
+	elseif self.target.todo then
 		return "todo"
 	end
 	if not self.target.agent then

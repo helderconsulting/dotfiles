@@ -59,6 +59,11 @@ function M.record(store, report, now)
 			return r:observe(report, now)
 		end)
 	end
+	if report.id and Agent.observes(report) and store:get(Agent, report.id) then
+		store:update(Agent, report.id, function(a)
+			return a:observe(report, now)
+		end)
+	end
 	store:update(Usage, report.provider, function(u)
 		return u:observe(report, now)
 	end)
@@ -70,6 +75,20 @@ function M.lose_all_but(store, live, now)
 			store:update(Runtime, r.id, function(x)
 				return x:observe({ event = "lose" }, now)
 			end)
+		end
+	end
+end
+
+function M.forget_ended(store, live, saved)
+	for _, a in ipairs(store:all(Agent)) do
+		if a:is_hosted() and not a:is_running() and not live[a.id] and not saved[a.id] then
+			store:remove(Agent, a.id)
+		end
+	end
+	for _, r in ipairs(store:all(Runtime)) do
+		local agent = store:get(Agent, r.id)
+		if not live[r.id] and not saved[r.id] and not (agent and agent:is_running()) then
+			store:remove(Runtime, r.id)
 		end
 	end
 end

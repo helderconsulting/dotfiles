@@ -147,7 +147,10 @@ function M.reload(_, tab)
 		for _, v in ipairs(views) do
 			w.panes[v.role] = nil
 		end
-		layout.ensure(tab, w)
+		local ok, err = pcall(layout.ensure, tab, w)
+		if not ok then
+			data.log.error("reload.layout_failed", { workspace = w.id, error = tostring(err) })
+		end
 		data.save_workspace(w)
 		layout.apply(tab, w)
 	end

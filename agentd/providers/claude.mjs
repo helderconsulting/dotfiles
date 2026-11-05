@@ -44,6 +44,23 @@ function usageOf(info) {
 	return { windows: list, overage: info?.overageStatus, extra: info?.isUsingOverage === true };
 }
 
+function limitOf(info) {
+	return { resets_at: info.resetsAt ?? null, window: windowNames[info.rateLimitType] ?? info.rateLimitType ?? null };
+}
+
+export class LimitWatch {
+	#rejected = null;
+
+	observe(m) {
+		if (m.type === "rate_limit_event") {
+			this.#rejected = m.rate_limit_info?.status === "rejected" ? limitOf(m.rate_limit_info) : null;
+		} else if (m.type === "assistant" && m.error === "rate_limit" && !m.parent_tool_use_id) {
+			return this.#rejected ?? {};
+		}
+		return null;
+	}
+}
+
 function planProblem(account) {
 	if (process.env.ANTHROPIC_API_KEY) return "ANTHROPIC_API_KEY is set, usage would be billed to the API";
 	if (account.apiProvider && account.apiProvider !== "firstParty") return `signed in through ${account.apiProvider}, not a plan`;
@@ -79,9 +96,10 @@ class ClaudeSession extends Session {
 	#started;
 	#done;
 	#asks = 0;
+	#limits = new LimitWatch();
 
-	constructor({ cwd, prompt, model, mode, resume, host }) {
-		super({ id: resume ?? randomUUID(), provider: "claude", cwd, model, mode: mode ?? "auto", host });
+	constructor({ id, cwd, prompt, model, mode, resume, host }) {
+		super({ id: resume ?? id ?? randomUUID(), provider: "claude", cwd, model, mode: mode ?? "auto", host });
 		const gate = new Promise((resolve, reject) => {
 			this.#pass = resolve;
 			this.#fail = reject;
@@ -137,8 +155,8 @@ class ClaudeSession extends Session {
 	}
 
 	async #hook(input) {
-		if (input.hook_event_name === "UserPromptSubmit") this.#setBusy(true);
-		else if (input.hook_event_name === "Stop") this.#setBusy(false);
+		if (input.hook_event_name === "UserPromptSubmit") this.setBusy(true);
+		else if (input.hook_event_name === "Stop") this.setBusy(false);
 		if (input.cwd && input.cwd !== this.cwd) {
 			this.cwd = input.cwd;
 			this.changed();
@@ -148,12 +166,6 @@ class ClaudeSession extends Session {
 		} catch {
 			return {};
 		}
-	}
-
-	#setBusy(busy) {
-		if (this.busy === busy) return;
-		this.busy = busy;
-		this.changed();
 	}
 
 	async #ask(tool, input, { signal, suggestions, toolUseID }) {
@@ -178,7 +190,10 @@ class ClaudeSession extends Session {
 	}
 
 	#observe(m) {
-		if (m.type === "system" && m.subtype === "init") {
+		const hit = this.#limits.observe(m);
+		if (hit) {
+			this.limit(hit);
+		} else if (m.type === "system" && m.subtype === "init") {
 			this.model = m.model;
 			if (m.apiKeySource && m.apiKeySource !== "none") {
 				this.report("reject", { reason: `using an API key from ${m.apiKeySource}` });

@@ -2,7 +2,7 @@ local Model = require("workspace.model")
 
 local Comment = Model.extend({
 	kind = "comments",
-	fields = { "id", "state", "key", "path", "rev", "line1", "line2", "text", "images", "reply", "created", "sent_at", "resolved_at", "sent_to" },
+	fields = { "id", "state", "key", "path", "rev", "line1", "line2", "text", "images", "reply", "created", "sent_at", "resolved_at", "sent_to", "remote" },
 	machine = {
 		initial = "draft",
 		states = {
@@ -14,6 +14,9 @@ local Comment = Model.extend({
 })
 
 function Comment:location()
+	if not self.line1 then
+		return self.path or "?"
+	end
 	local range = self.line2 and self.line2 ~= self.line1 and ("-" .. self.line2) or ""
 	return (self.path or "?") .. ":" .. tostring(self.line1 or "?") .. range
 end
@@ -32,12 +35,12 @@ end
 
 local Review = Model.extend({
 	kind = "reviews",
-	fields = { "id", "state", "root", "comments", "ready", "approved" },
+	fields = { "id", "state", "root", "comments", "ready", "approved", "dismissed" },
 	machine = {
 		initial = "open",
 		states = {
-			open = { send = "changes", ready = "ready" },
-			changes = { send = "changes", ready = "ready" },
+			open = { send = "changes", ready = "ready", approve = "approved" },
+			changes = { send = "changes", ready = "ready", approve = "approved" },
 			ready = { send = "changes", ready = "ready", approve = "approved" },
 			approved = { send = "changes", ready = "ready" },
 		},
@@ -46,9 +49,17 @@ local Review = Model.extend({
 
 Review.Comment = Comment
 
+Review.words = {
+	open = { "open", "busy" },
+	changes = { "changes requested", "bad" },
+	ready = { "ready for review", "ok" },
+	approved = { "approved", "ok" },
+}
+
 Review.reply_heading = "On your reply:"
 Review.changes_heading = "Review comments on the current changes:"
 Review.instructions_lead = "When you have handled a comment"
+Review.cli = "~/.config/wezterm/bin/review"
 
 local function trim(s)
 	return (s:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -184,6 +195,10 @@ function Review:delete(id, at)
 	for i, c in ipairs(self.comments) do
 		if c.id == id and c:transition("delete", at) then
 			table.remove(self.comments, i)
+			if c.remote then
+				self.dismissed = self.dismissed or {}
+				self.dismissed[c.remote.thread] = true
+			end
 			self._removed = self._removed or {}
 			for _, t in ipairs(c:take_transitions()) do
 				t.item = c.id
@@ -195,6 +210,12 @@ function Review:delete(id, at)
 end
 
 function Review:clear()
+	for _, c in ipairs(self.comments) do
+		if c.remote then
+			self.dismissed = self.dismissed or {}
+			self.dismissed[c.remote.thread] = true
+		end
+	end
 	self.comments = {}
 end
 
@@ -228,6 +249,76 @@ function Review:send(comments, at, to)
 		self:transition("send", at)
 	end
 	return comments
+end
+
+function Review:remote_comment(thread)
+	for _, c in ipairs(self.comments) do
+		if c.remote and c.remote.thread == thread then
+			return c
+		end
+	end
+end
+
+function Review:import(threads, iid, random, at)
+	local changes = { added = {}, reopened = {}, closed = {} }
+	for _, t in ipairs(threads) do
+		local c = self:remote_comment(t.id)
+		if not c and not t.resolved and not (self.dismissed or {})[t.id] then
+			c = self:add({
+				key = t.path and (self.root .. "/" .. t.path) or nil,
+				path = t.path or ("merge request !" .. iid),
+				line1 = t.line,
+				line2 = t.line,
+				text = t.text,
+				remote = { thread = t.id, iid = iid, notes = t.notes, author = t.author },
+			}, random, at)
+			table.insert(changes.added, c)
+		elseif c and t.resolved and c:is_draft() then
+			self:delete(c.id, at)
+			table.insert(changes.closed, c)
+		elseif c and t.resolved and c:is_open() then
+			self:resolve(c.id, "resolved on GitLab", at)
+			c.remote.pushed = true
+			table.insert(changes.closed, c)
+		elseif c and not t.resolved and c.state == "resolved" and c.remote.pushed and t.notes > c.remote.notes then
+			self:edit(c.id, t.text, at)
+			c.remote.notes, c.remote.pushed = t.notes, nil
+			table.insert(changes.reopened, c)
+		end
+	end
+	return changes
+end
+
+function Review:addresses(iid)
+	local any = false
+	for _, c in ipairs(self.comments) do
+		if c.remote and c.remote.iid == iid then
+			if c.state ~= "resolved" then
+				return false
+			end
+			any = true
+		end
+	end
+	return any
+end
+
+function Review:unpushed(iid)
+	local list = {}
+	for _, c in ipairs(self.comments) do
+		if c.state == "resolved" and c.remote and c.remote.iid == iid and not c.remote.pushed then
+			table.insert(list, c)
+		end
+	end
+	return list
+end
+
+function Review:mark_pushed(id, notes)
+	local c = self:comment(id)
+	if not (c and c.remote and c.state == "resolved") then
+		return false
+	end
+	c.remote.pushed, c.remote.notes = true, notes
+	return true
 end
 
 local unresolvable = {
@@ -431,6 +522,98 @@ function Review:gate(payload, command)
 	return reason and { decision = "block", reason = reason } or nil
 end
 
+function Review:in_files()
+	local list = {}
+	for _, c in ipairs(self.comments) do
+		if c.key and c.line1 and c.path ~= "answer" then
+			table.insert(list, c)
+		end
+	end
+	table.sort(list, function(a, b)
+		if a.path ~= b.path then
+			return a.path < b.path
+		end
+		return a.line1 < b.line1
+	end)
+	return list
+end
+
+function Review:by_path()
+	local out = {}
+	for _, c in ipairs(self:in_files()) do
+		out[c.path] = out[c.path] or { draft = 0, sent = 0, resolved = 0 }
+		out[c.path][c.state] = out[c.path][c.state] + 1
+	end
+	return out
+end
+
+function Review.step(list, path, line, direction)
+	if #list == 0 then
+		return nil
+	end
+	path, line = path or "", line or 0
+	if direction > 0 then
+		for _, c in ipairs(list) do
+			if c.path > path or (c.path == path and c.line1 > line) then
+				return c
+			end
+		end
+		return list[1]
+	end
+	for i = #list, 1, -1 do
+		local c = list[i]
+		if c.path < path or (c.path == path and c.line1 < line) then
+			return c
+		end
+	end
+	return list[#list]
+end
+
+function Review.prompt(list, cli, quote, expand)
+	local replies, reviews, remote = {}, {}, false
+	for _, c in ipairs(list) do
+		table.insert(c.path == "answer" and replies or reviews, c)
+		remote = remote or c.remote ~= nil
+	end
+	local function quoted(c, label)
+		local block = label and { label } or {}
+		for _, l in ipairs(quote(c)) do
+			table.insert(block, "> " .. l)
+		end
+		table.insert(block, expand(c))
+		return table.concat(block, "\n")
+	end
+	local function section(heading, items, label)
+		local blocks = { heading }
+		for _, c in ipairs(items) do
+			table.insert(blocks, quoted(c, label and label(c)))
+		end
+		return table.concat(blocks, "\n\n")
+	end
+	local parts = {}
+	if #replies > 0 then
+		table.insert(parts, section(Review.reply_heading, replies))
+	end
+	if #reviews == 0 then
+		return table.concat(parts, "\n\n")
+	end
+	table.insert(parts, section(Review.changes_heading, reviews, function(c)
+		local origin = c.remote and (" (GitLab !" .. c.remote.iid .. ")") or c.rev and (" (old version at " .. c.rev:sub(1, 12) .. ")") or ""
+		return ("[%s] %s"):format(c.id, c:location()) .. origin
+	end))
+	local lines = {
+		Review.instructions_lead .. ", mark it resolved with a one-line note on what you changed:",
+		("`%s resolve <id> \"<note>\"`"):format(cli),
+	}
+	if remote then
+		table.insert(lines, "For the GitLab ones, your note is posted as a reply on the merge request thread and the thread is resolved.")
+	end
+	table.insert(lines, "If you disagree or need input, leave it open and say why.")
+	table.insert(lines, ("Once all are handled, mark the work ready for review: `%s ready \"<short summary>\"`"):format(cli))
+	table.insert(parts, table.concat(lines, "\n"))
+	return table.concat(parts, "\n\n")
+end
+
 function Review.recipient(agents, root, preferred)
 	local Agent = require("workspace.models.agent")
 	local running = {}
@@ -440,8 +623,11 @@ function Review.recipient(agents, root, preferred)
 		end
 	end
 	local here = Agent.running_in(running, root)
-	if #here == 1 then
-		return here[1], here
+	local exact = vim.tbl_filter(function(a)
+		return a.root == root
+	end, here)
+	if #here == 1 or #exact == 1 then
+		return #exact == 1 and exact[1] or here[1], here
 	end
 	local list = #here > 0 and here or running
 	table.sort(list, function(x, y)

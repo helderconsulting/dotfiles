@@ -60,7 +60,7 @@ local function launch(cwd, prompt, resume, done, choice)
 	end
 	choice = choice or {}
 	local provider, model, mode = choice.provider or M.provider, choice.model, choice.mode
-	agentd.call({ op = "start", provider = provider, cwd = cwd, prompt = prompt, resume = resume, model = model, mode = mode }, function(ok, res)
+	agentd.call({ op = "start", provider = provider, id = choice.id, cwd = cwd, prompt = prompt, resume = resume, model = model, mode = mode }, function(ok, res)
 		if ok then
 			log().info("agent.start", { runtime = "sdk", id = res.id, cwd = cwd })
 			return done and done(true, res.id)
@@ -75,7 +75,7 @@ local function launch(cwd, prompt, resume, done, choice)
 			return done and done(false)
 		end
 		vim.notify("running on claude --bg instead of the sdk: " .. why, vim.log.levels.WARN)
-		local args = resume and { "--resume", resume } or {}
+		local args = resume and { "--resume", resume } or choice.id and { "--session-id", choice.id } or {}
 		if model and model ~= "default" then
 			vim.list_extend(args, { "--model", model })
 		end
@@ -165,6 +165,11 @@ local function channel(agent)
 end
 
 function M.message(agent, text, done)
+	agent = app.agent(agent.id) or agent
+	if agent:wants_resume() then
+		log().info("agent.message.resume", { agent = agent.id, hosted = agent:is_hosted(), length = #text })
+		return M.resume(agent.id, agent.root or agent.cwd, text, done)
+	end
 	local ok, why = agent:can_receive()
 	if not ok then
 		vim.notify(why, vim.log.levels.WARN)
@@ -178,6 +183,21 @@ function M.message(agent, text, done)
 		if sent then
 			app.store():update(app.models.Agent, agent.id, function(a)
 				a:start_sending(text, app.now())
+			end)
+		end
+		if done then
+			done(sent)
+		end
+	end)
+end
+
+M.continue_prompt = "continue"
+
+function M.continue(agent, done)
+	M.message(agent, M.continue_prompt, function(sent)
+		if sent then
+			app.store():update(app.models.Agent, agent.id, function(a)
+				return a:continue(app.now())
 			end)
 		end
 		if done then
@@ -288,6 +308,9 @@ function M.move_to_sdk(agent, done)
 end
 
 function M.stop(agent, done)
+	app.store():update(app.models.Agent, agent.id, function(a)
+		return a:apply("end", app.now())
+	end)
 	if channel(agent) == "sdk" then
 		return agentd.call({ op = "stop", id = agent.id }, function(ok)
 			if done then
@@ -372,9 +395,12 @@ function M.deliver(draft, done)
 	local agent = draft.target.agent and app.agent(draft.target.agent)
 	local how, why = draft:delivery(agent)
 	local text = draft:message()
-	if how == "todo" then
-		require("configs.todos").save(draft.target, text)
-		return done and done(true, "todo")
+	if how == "todo" or how == "epic" then
+		local ok, why = require("configs.todos").save(draft.target, text)
+		if not ok then
+			vim.notify(why or "couldn't save it", vim.log.levels.WARN)
+		end
+		return done and done(ok ~= false and ok ~= nil, how)
 	elseif how == "message" then
 		return M.message(agent, text, done)
 	elseif how == "hold" then

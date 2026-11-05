@@ -67,11 +67,16 @@ function Bridge:cancel(req)
 	end
 end
 
-function Bridge:sync(req)
-	local live = {}
-	for _, id in ipairs(req.sessions or {}) do
-		live[id] = true
+local function set(ids)
+	local out = {}
+	for _, id in ipairs(ids or {}) do
+		out[id] = true
 	end
+	return out
+end
+
+function Bridge:sync(req)
+	local live = set(req.sessions)
 	local now = nvim.clock()
 	agents.lose_all_but(self.store, live, now)
 	for _, a in ipairs(self.store:all(Agent)) do
@@ -81,6 +86,9 @@ function Bridge:sync(req)
 			end)
 			hooks.drop_asks(self.store, a.id)
 		end
+	end
+	if req.saved then
+		agents.forget_ended(self.store, live, set(req.saved))
 	end
 end
 

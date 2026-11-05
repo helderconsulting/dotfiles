@@ -3,6 +3,8 @@ import { Provider } from "./providers/provider.mjs";
 export const continuePrompt =
 	"agentd restarted while you were working, so your last turn was cut off. Continue the task from where you stopped.";
 
+export const limitPrompt = "The usage limit you hit has reset. Continue the task from where you stopped.";
+
 export class Daemon {
 	#providers;
 	#store;
@@ -11,13 +13,17 @@ export class Daemon {
 	#grace;
 	#stale;
 	#onShutdown;
+	#clock;
+	#limitSlack;
 	#sessions = new Map();
+	#wakes = new Map();
+	#announced = new WeakSet();
 	#holders = new Set();
 	#idle = null;
 	#closing = false;
 	#draining = false;
 
-	constructor({ providers, store, bridge, log = () => {}, grace = 8000, stale = () => false, onShutdown = () => {} }) {
+	constructor({ providers, store, bridge, log = () => {}, grace = 8000, stale = () => false, onShutdown = () => {}, clock = () => Date.now(), limitSlack = 30000 }) {
 		this.#providers = Object.fromEntries(
 			providers.map((p) => {
 				if (!(p instanceof Provider)) throw new Error(`${p?.constructor?.name} is not a Provider`);
@@ -30,6 +36,8 @@ export class Daemon {
 		this.#grace = grace;
 		this.#stale = stale;
 		this.#onShutdown = onShutdown;
+		this.#clock = clock;
+		this.#limitSlack = limitSlack;
 	}
 
 	get sessions() {
@@ -51,15 +59,27 @@ export class Daemon {
 
 	bridgeState(state) {
 		this.#log("bridge.state", { state });
+		if (state === "up") this.#resync();
 		this.broadcast({ event: "bridge", state });
 	}
 
+	#resync() {
+		const live = [...this.#sessions.values()].filter((s) => this.#announced.has(s));
+		this.#bridge.send("sync", { sessions: live.map((s) => s.id) });
+		for (const s of live) {
+			this.#bridge.send("started", { id: s.id, cwd: s.cwd });
+			this.#bridge.send("runtime", { report: { type: "runtime", id: s.id, provider: s.provider, event: "verify", model: s.model, mode: s.mode } });
+		}
+	}
+
 	async boot() {
-		this.#bridge.send("sync", { sessions: [] });
 		const saved = this.#store.list();
+		this.#bridge.send("sync", { sessions: [], saved: saved.map((entry) => entry.id) });
 		for (const entry of saved) {
 			const prompt = entry.busy ? continuePrompt : undefined;
-			this.#open({ ...entry, resume: entry.id, prompt }).catch((err) => this.#log("resume.failed", { id: entry.id, error: err.message }));
+			this.#open({ ...entry, resume: entry.id, prompt })
+				.then((session) => entry.limited && session.limit(entry.limited))
+				.catch((err) => this.#log("resume.failed", { id: entry.id, error: err.message }));
 		}
 		this.#armIdle();
 		return saved.length;
@@ -73,15 +93,16 @@ export class Daemon {
 			cancel: (request) => this.#bridge.send("cancel", { request }),
 			changed: (session) => {
 				if (this.#sessions.has(session.id)) this.#store.save(session);
+				this.#armWake(session);
 				this.#drainCheck();
 			},
 		};
 	}
 
-	async #open({ provider = "claude", cwd, prompt, model, mode, resume }) {
+	async #open({ provider = "claude", id, cwd, prompt, model, mode, resume }) {
 		const impl = this.#providers[provider];
 		if (!impl) throw new Error(`no provider ${provider}`);
-		const session = impl.open({ cwd, prompt, model, mode, resume, host: this.#host() });
+		const session = impl.open({ id, cwd, prompt, model, mode, resume, host: this.#host() });
 		this.#sessions.set(session.id, session);
 		session.done.then((error) => this.#ended(session, error));
 		try {
@@ -92,6 +113,7 @@ export class Daemon {
 			throw Object.assign(err, { code: "plan" });
 		}
 		this.#store.save(session);
+		this.#announced.add(session);
 		this.#bridge.send("started", { id: session.id, cwd: session.cwd });
 		this.#log("session.start", { id: session.id, provider, cwd, resumed: Boolean(resume) });
 		return session;
@@ -100,9 +122,31 @@ export class Daemon {
 	#ended(session, error) {
 		if (this.#sessions.get(session.id) !== session) return;
 		this.#sessions.delete(session.id);
+		this.#disarmWake(session.id);
 		if (!this.#closing) this.#store.forget(session.id);
 		this.#log("session.end", { id: session.id, error, kept: this.#closing });
 		this.#bridge.send("runtime", { report: { type: "runtime", id: session.id, provider: session.provider, event: "lose", reason: error } });
+	}
+
+	#armWake(session) {
+		const due = session.limited?.resets_at ?? null;
+		if ((this.#wakes.get(session.id)?.due ?? null) === due) return;
+		this.#disarmWake(session.id);
+		if (due === null) return;
+		const timer = setTimeout(() => this.#wake(session), Math.max(0, due * 1000 - this.#clock()) + this.#limitSlack);
+		this.#wakes.set(session.id, { due, timer });
+	}
+
+	#disarmWake(id) {
+		clearTimeout(this.#wakes.get(id)?.timer);
+		this.#wakes.delete(id);
+	}
+
+	#wake(session) {
+		this.#wakes.delete(session.id);
+		if (this.#sessions.get(session.id) !== session || !session.limited) return;
+		this.#log("limit.resume", { id: session.id });
+		session.send(limitPrompt);
 	}
 
 	#find(id) {
@@ -151,6 +195,7 @@ export class Daemon {
 		if (this.#closing) return;
 		this.#closing = true;
 		this.#disarmIdle();
+		for (const id of this.#wakes.keys()) this.#disarmWake(id);
 		this.#log("shutdown", { reason, sessions: this.#sessions.size });
 		this.broadcast({ event: "shutdown", reason });
 		const done = [...this.#sessions.values()].map((s) => {
@@ -182,12 +227,12 @@ export class Daemon {
 			return { providers: list };
 		},
 
-		start: async ({ provider, cwd, prompt, model, mode, resume }) => {
+		start: async ({ provider, id, cwd, prompt, model, mode, resume }) => {
 			if (resume && this.#sessions.has(resume)) {
 				if (prompt) this.#sessions.get(resume).send(prompt);
 				return { id: resume };
 			}
-			const session = await this.#open({ provider, cwd, prompt, model, mode, resume });
+			const session = await this.#open({ provider, id, cwd, prompt, model, mode, resume });
 			return { id: session.id };
 		},
 

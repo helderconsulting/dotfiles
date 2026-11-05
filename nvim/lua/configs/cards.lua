@@ -4,7 +4,7 @@ M.height = 3
 M.dot = "  ●"
 M.heading = 1
 
-local kinds = { ok = "CardOk", busy = "CardBusy", bad = "CardBad", off = "CardOff" }
+local kinds = { ok = "CardOk", busy = "CardBusy", bad = "CardBad", off = "CardOff", limit = "CardLimit" }
 
 M.meter_width = 10
 
@@ -28,6 +28,25 @@ function M.meter(m, room, kind)
 		{ track, #text, kind .. "Detail" },
 	}
 end
+local decorations = { ok = "Strong", busy = "Emph", bad = "Alert", off = "Detail" }
+
+function M.segments(list, room, kind)
+	local text = ""
+	for _, seg in ipairs(list) do
+		text = text .. seg[1]
+	end
+	text = M.fit(text, room)
+	local spans, at = {}, 0
+	for _, seg in ipairs(list) do
+		local stop = math.min(at + #seg[1], #text)
+		if seg[2] and decorations[seg[2]] and stop > at then
+			table.insert(spans, { at, stop, (kind or "CardOff") .. decorations[seg[2]] })
+		end
+		at = at + #seg[1]
+	end
+	return text, spans
+end
+
 local layouts = {}
 local stickies = {}
 
@@ -209,10 +228,18 @@ function M.render(buf, win, ns, list, card, opts)
 		local prefix = o.indent .. "▌"
 		local inset = vim.fn.strdisplaywidth(o.indent) + (o.multi and 4 or 3)
 		local rows = {}
-		for k = 1, o.rows or (type(text[4]) == "table" and 4 or 3) do
+		local count = 3
+		while type(text[count + 1]) == "table" do
+			count = count + 1
+		end
+		for k = 1, o.rows or count do
 			local parts
 			local room = width - inset - (k == 1 and e.unread and vim.fn.strdisplaywidth(M.dot) or 0)
-			if type(text[k]) == "table" then
+			if type(text[k]) == "table" and text[k].segments then
+				local line, spans = M.segments(text[k].segments, room, kind)
+				table.insert(rows, { line, groups[k] or groups[2], spans = spans })
+				parts = {}
+			elseif type(text[k]) == "table" then
 				local line, spans = M.meter(text[k], room, kind)
 				table.insert(rows, { line, groups[3], spans = spans })
 				parts = {}
@@ -257,6 +284,9 @@ function M.render(buf, win, ns, list, card, opts)
 	end
 	for i, e in ipairs(list) do
 		local chosen = i == selected
+		if e.space_before and not opts.frozen then
+			table.insert(lines, "")
+		end
 		layout.starts[i] = add(e, card(e), {
 			chosen = chosen,
 			active = active,

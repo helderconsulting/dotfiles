@@ -6,9 +6,15 @@ local dir = vim.env.HOME .. "/.config/agentd"
 local socket = app.paths.root .. "/agentd.sock"
 local log_file = app.paths.root .. "/agentd.log"
 local log_limit = 1024 * 1024
-local launch_wait = 8000
+M.launch_wait = 8000
+M.drop_limit = 3
+
+function M.command()
+	return "node", { dir .. "/agentd.mjs" }, dir
+end
 local starting
 local holding = false
+local hold_pipe
 local drops = {}
 
 local function health(event, reason)
@@ -60,6 +66,7 @@ local function connect(req, on_reply, on_close, on_event)
 		end)
 		pipe:write(vim.json.encode(req) .. "\n")
 	end)
+	return pipe
 end
 
 function M.installed()
@@ -74,9 +81,7 @@ local function rotate_log()
 end
 
 local function finish_launch(ok, why)
-	if not ok then
-		health("fail", why)
-	end
+	health(ok and "connect" or "fail", why)
 	local waiting = starting
 	starting = nil
 	for _, cb in ipairs(waiting or {}) do
@@ -116,7 +121,7 @@ local function launch(done)
 			end)
 		end)
 	end)
-	deadline:start(launch_wait, 0, vim.schedule_wrap(function()
+	deadline:start(M.launch_wait, 0, vim.schedule_wrap(function()
 		stop_waiting()
 		connect({ op = "ping" }, function(ok)
 			if starting then
@@ -131,7 +136,8 @@ local function launch(done)
 	for k, v in pairs(env) do
 		table.insert(env_list, k .. "=" .. v)
 	end
-	local handle = vim.uv.spawn("node", { args = { dir .. "/agentd.mjs" }, cwd = dir, detached = true, env = env_list, stdio = { nil, fd, fd } }, function() end)
+	local command, args, cwd = M.command()
+	local handle = vim.uv.spawn(command, { args = args, cwd = cwd, detached = true, env = env_list, stdio = { nil, fd, fd } }, function() end)
 	if fd then
 		vim.uv.fs_close(fd)
 	end
@@ -160,17 +166,27 @@ local function dropped_too_often()
 		return now - t < 60000
 	end, drops)
 	table.insert(drops, now)
-	return #drops > 3
+	return #drops > M.drop_limit
 end
 
 local keep
 
+local function socket_id()
+	local st = vim.uv.fs_stat(socket)
+	return st and (st.ino .. ":" .. st.birthtime.sec .. "." .. st.birthtime.nsec) or nil
+end
+
 local function after_old_daemon()
+	local old = socket_id()
 	local watcher = vim.uv.new_fs_event()
 	watcher:start(app.paths.root, {}, function(_, name)
-		if name == "agentd.sock" and not vim.uv.fs_stat(socket) then
+		if name == "agentd.sock" and not watcher:is_closing() and socket_id() ~= old then
 			watcher:close()
-			vim.schedule(keep)
+			vim.schedule(function()
+				if holding then
+					keep()
+				end
+			end)
 		end
 	end)
 end
@@ -178,12 +194,15 @@ end
 local bridge_events = {
 	up = { "bridge_back" },
 	lost = { "bridge_lost", "the bridge restarted" },
-	failed = { "bridge_lost", "the bridge gave up, restart agentd" },
+	failed = { "bridge_lost", "the bridge gave up, agentd retries it in a minute" },
 }
 
 function keep()
 	local legacy, stopped = false, false
-	connect({ op = "hold" }, function(ok, res)
+	hold_pipe = connect({ op = "hold" }, function(ok, res)
+		if not holding then
+			return
+		end
 		if ok and not res.keep then
 			legacy = true
 			return after_old_daemon()
@@ -207,7 +226,7 @@ function keep()
 			end
 		end)
 	end, function()
-		if legacy then
+		if legacy or not holding then
 			return
 		end
 		if not stopped then
@@ -220,7 +239,9 @@ function keep()
 		end
 		keep()
 	end, function(msg)
-		if msg.event == "bridge" and bridge_events[msg.state] then
+		if not holding then
+			return
+		elseif msg.event == "bridge" and bridge_events[msg.state] then
 			local b = bridge_events[msg.state]
 			health(b[1], b[2])
 		elseif msg.event == "shutdown" then
@@ -228,6 +249,14 @@ function keep()
 			health("stop", msg.reason)
 		end
 	end)
+end
+
+function M.stop_holding()
+	holding = false
+	if hold_pipe and not hold_pipe:is_closing() then
+		hold_pipe:close()
+	end
+	hold_pipe = nil
 end
 
 function M.hold()

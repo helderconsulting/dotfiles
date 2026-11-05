@@ -2,14 +2,14 @@ local Model = require("workspace.model")
 
 local View = Model.extend({
 	kind = "views",
-	fields = { "id", "state", "agent", "turn", "draft", "ask", "history", "reveal", "section", "sections", "docker", "search", "pick", "todo" },
+	fields = { "id", "state", "agent", "turn", "draft", "ask", "history", "reveal", "section", "sections", "docker", "search", "pick", "entry" },
 	machine = {
 		initial = "answer",
 		states = {
-			answer = { show = "answer", compose = "draft", ask = "ask", show_todo = "todo" },
-			draft = { show = "answer", compose = "draft", finish = "answer", ask = "ask", show_todo = "todo" },
+			answer = { show = "answer", compose = "draft", ask = "ask", show_entry = "entry" },
+			draft = { show = "answer", compose = "draft", finish = "answer", ask = "ask", show_entry = "entry" },
 			ask = { ask = "ask", settle = "answer", compose = "draft", show = "answer" },
-			todo = { show = "answer", show_todo = "todo", compose = "draft", ask = "ask" },
+			entry = { show = "answer", show_entry = "entry", compose = "draft", ask = "ask" },
 		},
 	},
 })
@@ -42,20 +42,21 @@ function View:finish_compose()
 end
 
 function View:focus()
-	if self.state == "todo" then
-		return self.todo
+	if self.state == "entry" and self.entry then
+		return self.entry.id
 	end
 	return self.agent
 end
 
-function View:show_todo(id)
-	if self.state == "todo" and self.todo == id then
+function View:shows_entry(kind, id)
+	return self.state == "entry" and self.entry ~= nil and self.entry.kind == kind and self.entry.id == id
+end
+
+function View:show_entry(kind, id)
+	if self:shows_entry(kind, id) or not self:transition("show_entry") then
 		return false
 	end
-	if not self:transition("show_todo") then
-		return false
-	end
-	self.todo = id
+	self.entry = { kind = kind, id = id }
 	return true
 end
 

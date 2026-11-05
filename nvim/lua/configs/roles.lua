@@ -8,15 +8,17 @@ local roles = {
 		mason = true,
 	},
 	sidebar = {
+		modules = { "configs.lifeline" },
 		packs = { "packs.whichkey" },
 		start = "configs.sidebar",
 	},
 	conversation = {
-		modules = { "configs.review" },
+		modules = { "configs.review", "configs.lifeline" },
 		packs = { "packs.whichkey" },
 		start = "configs.conversation",
 	},
 	docker = {
+		modules = { "configs.lifeline" },
 		packs = { "packs.whichkey" },
 		later = { "packs.git" },
 		start = "configs.docker",

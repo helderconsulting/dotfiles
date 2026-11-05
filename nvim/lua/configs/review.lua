@@ -6,8 +6,8 @@ local Review, Draft = app.models.Review, app.models.Draft
 local M = {}
 
 local ns = vim.api.nvim_create_namespace("review")
-local review_cli = "~/.config/wezterm/bin/review"
 local marks = {}
+local counts_cache = {}
 
 local looks = {
 	draft = { sign = "ReviewNoteSign", line = "ReviewNoteLine" },
@@ -103,6 +103,7 @@ local function draw(c)
 end
 
 local function draw_all()
+	counts_cache = {}
 	local live = {}
 	for _, r in ipairs(all()) do
 		for _, c in ipairs(r.comments) do
@@ -156,12 +157,13 @@ function M.add(line1, line2)
 	local range = line1 == line2 and tostring(line1) or (line1 .. "-" .. line2)
 	local inline = { buf = buf, line = existing and select(2, tracked_lines(existing)) or line2 }
 	inline.on_todo = function(text, images)
-		local block = { Draft.expand(text, images), "", (loc.path == "answer" and "on the agent's reply" or (loc.path .. ":" .. range)) }
+		local quote = { (loc.path == "answer" and "On the agent's reply" or (loc.path .. ":" .. range)) .. ":" }
 		for _, l in ipairs(vim.api.nvim_buf_get_lines(buf, line1 - 1, line2, false)) do
-			table.insert(block, "> " .. l)
+			table.insert(quote, "> " .. l)
 		end
-		local id = require("configs.todos").create(loc.root, table.concat(block, "\n"), "you")
-		vim.notify("added todo " .. id)
+		local comment = Draft.expand(text, images)
+		local spec = { title = comment:match("[^\n]+") or comment, description = table.concat(quote, "\n"), criteria = { "Given , when , then " } }
+		require("configs.todos").add_to(nil, loc.root, app.models.Todo.render(spec))
 	end
 	if existing and marks[existing.id] then
 		pcall(vim.api.nvim_buf_del_extmark, buf, ns, marks[existing.id].note)
@@ -207,46 +209,26 @@ function M.clear()
 	end
 end
 
+function M.quote(c)
+	local l1, l2 = tracked_lines(c)
+	if not l1 then
+		return {}
+	end
+	local buf = find_buf(c.key)
+	if buf then
+		return vim.api.nvim_buf_get_lines(buf, l1 - 1, l2, false)
+	end
+	if c.rev or not c.key or vim.fn.filereadable(c.key) == 0 then
+		return {}
+	end
+	return vim.list_slice(vim.fn.readfile(c.key, "", l2), l1, l2)
+end
+
 function M.prompt(list, root)
-	local replies, reviews = {}, {}
-	for _, c in ipairs(list) do
-		table.insert(c.path == "answer" and replies or reviews, c)
-	end
-	local function quoted(c, label)
-		local block = label and { label } or {}
-		local buf = find_buf(c.key)
-		local l1, l2 = tracked_lines(c)
-		for _, l in ipairs(buf and vim.api.nvim_buf_get_lines(buf, l1 - 1, l2, false) or {}) do
-			table.insert(block, "> " .. l)
-		end
-		table.insert(block, Draft.expand(c.text, c.images))
-		return table.concat(block, "\n")
-	end
-	local function section(heading, list, label)
-		local blocks = { heading }
-		for _, c in ipairs(list) do
-			table.insert(blocks, quoted(c, label and label(c)))
-		end
-		return table.concat(blocks, "\n\n")
-	end
-	local parts = {}
-	if #replies > 0 then
-		table.insert(parts, section(Review.reply_heading, replies))
-	end
-	if #reviews == 0 then
-		return table.concat(parts, "\n\n")
-	end
-	table.insert(parts, section(Review.changes_heading, reviews, function(c)
-		return ("[%s] %s"):format(c.id, c:location()) .. (c.rev and (" (old version at " .. c.rev:sub(1, 12) .. ")") or "")
-	end))
-	local cli = ("%s -C %s"):format(review_cli, vim.fn.shellescape(real(root)))
-	table.insert(parts, table.concat({
-		Review.instructions_lead .. ", mark it resolved with a one-line note on what you changed:",
-		("`%s resolve <id> \"<note>\"`"):format(cli),
-		"If you disagree or need input, leave it open and say why.",
-		("Once all are handled, mark the work ready for review: `%s ready \"<short summary>\"`"):format(cli),
-	}, "\n"))
-	return table.concat(parts, "\n\n")
+	local cli = ("%s -C %s"):format(Review.cli, vim.fn.shellescape(real(root)))
+	return Review.prompt(list, cli, M.quote, function(c)
+		return Draft.expand(c.text, c.images)
+	end)
 end
 
 function M.send(root, list, agent_id)
@@ -320,10 +302,10 @@ end
 
 function M.approve()
 	local root = current_root()
-	local r = root and get(root)
-	if not r then
+	if not root then
 		return vim.notify("review: nothing to approve here", vim.log.levels.WARN)
 	end
+	local r = get(root) or Review.for_root(real(root))
 	local ok, why = r:can_approve()
 	if not ok then
 		return vim.notify("review: " .. why, vim.log.levels.WARN)
@@ -343,17 +325,23 @@ function M.approve()
 	end)
 end
 
+local function workspace()
+	local w = app.workspace_model()
+	return app.models.Workspace:new({ root = real(w and w.root or app.folder()) })
+end
+
 function M.list()
 	local entries, by_entry = {}, {}
+	local here = workspace()
 	for _, r in ipairs(all()) do
-		for _, c in ipairs(r.comments) do
+		for _, c in ipairs(here:contains(real(r.root) or "") and r.comments or {}) do
 			local entry = ("%-8s  %s  %s"):format(c.state == "draft" and "review" or c.state, c:location(), c:one_line())
 			table.insert(entries, entry)
 			by_entry[entry] = c
 		end
 	end
 	if #entries == 0 then
-		return vim.notify("review: no comments", vim.log.levels.INFO)
+		return vim.notify("review: no comments in this workspace", vim.log.levels.INFO)
 	end
 	vim.ui.select(entries, { prompt = "review comments" }, function(entry)
 		if entry then
@@ -371,8 +359,14 @@ function M.show(c)
 			return vim.cmd("normal! zz")
 		end
 	end
+	if not c.key then
+		return vim.notify("review: " .. c:location() .. ": " .. c:one_line(), vim.log.levels.INFO)
+	end
 	if c.rev or c.path == "answer" then
 		return vim.notify("review: " .. c.path .. " is not open here", vim.log.levels.INFO)
+	end
+	if vim.t.git_view == "codediff" and require("packs.git").show_in_diff(c.path, line1) then
+		return
 	end
 	if vim.t.git_view then
 		require("packs.git").editor_tab()
@@ -380,6 +374,36 @@ function M.show(c)
 	vim.cmd.edit(vim.fn.fnameescape(c.key))
 	vim.api.nvim_win_set_cursor(0, { math.min(line1, vim.api.nvim_buf_line_count(0)), 0 })
 	vim.cmd("normal! zz")
+end
+
+function M.step(direction)
+	local root = current_root()
+	local r = root and get(root)
+	local list = r and r:in_files() or {}
+	if #list == 0 then
+		return vim.notify("review: no comments on files here", vim.log.levels.INFO)
+	end
+	local loc = location(vim.api.nvim_get_current_buf())
+	local here = loc and real(loc.root) == real(root) and loc.path or nil
+	local c = Review.step(list, here, here and vim.fn.line(".") or nil, direction)
+	for i, item in ipairs(list) do
+		if item == c then
+			vim.api.nvim_echo({ { ("comment %d of %d · %s"):format(i, #list, c:location()), "Comment" } }, false, {})
+		end
+	end
+	M.show(c)
+end
+
+function M.file_counts(root)
+	root = real(root)
+	if not root then
+		return {}
+	end
+	if not counts_cache[root] then
+		local r = get(root)
+		counts_cache[root] = r and r:by_path() or {}
+	end
+	return counts_cache[root]
 end
 
 function M.reveal(request)
@@ -423,6 +447,12 @@ vim.keymap.set("n", "<leader>rd", function()
 	M.delete_at(vim.api.nvim_get_current_buf(), vim.fn.line("."))
 end, { desc = "delete review comment" })
 vim.keymap.set("n", "<leader>rf", M.list, { desc = "find review comments" })
+vim.keymap.set("n", "]r", function()
+	M.step(1)
+end, { desc = "next review comment" })
+vim.keymap.set("n", "[r", function()
+	M.step(-1)
+end, { desc = "previous review comment" })
 vim.keymap.set("n", "<leader>rs", M.send_all, { desc = "send review to agent" })
 vim.keymap.set("n", "<leader>rp", M.approve, { desc = "approve review" })
 vim.keymap.set("n", "<leader>rc", M.clear, { desc = "clear review comments" })

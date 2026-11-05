@@ -101,7 +101,7 @@ function M.send(target, done)
 			if #comments > 0 then
 				review.send(root, comments, target.agent)
 			end
-			local said = { held = "held until this turn ends: ", todo = "saved todo: " }
+			local said = { held = "held until this turn ends: ", todo = "saved ", epic = "saved " }
 			vim.notify((said[how] or "sent to ") .. (target.name or "the agent"))
 		end
 		done(ok, ok and draft:message() or nil)
@@ -173,7 +173,7 @@ function M.edit(win, target, done, opts)
 			end
 		end)
 	end
-	local verb = target.todo and "save the todo" or "send to the agent"
+	local verb = target.epic and "save the epic" or target.todo and "save the todo" or "send to the agent"
 	vim.keymap.set({ "n", "i" }, "<C-s>", send, { buffer = buf, desc = verb })
 	vim.keymap.set("n", "<leader>s", send, { buffer = buf, desc = verb })
 	paste_keys(buf, target)

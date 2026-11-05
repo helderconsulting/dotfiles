@@ -44,6 +44,10 @@ local highlights = {
 	ReviewSentSign = { fg = palette.orange, bold = true },
 	ReviewResolved = { fg = palette.dim, italic = true },
 	ReviewResolvedSign = { fg = palette.green, bold = true },
+	DiffSeenSign = { fg = palette.dim },
+	DiffSeenDone = { fg = palette.green, bold = true },
+	DiffSeenPartly = { fg = palette.dim, italic = true },
+	DiffSeenChanged = { fg = palette.green, underline = true },
 	ReviewReady = { fg = palette.bright, bold = true },
 	ReviewStatus = { fg = "#6A6280" },
 	AnswerTurn = { fg = palette.purple, bold = true },
@@ -87,10 +91,14 @@ for kind, c in pairs({
 	Busy = { fg = palette.purple, bright = "#C0A8EC", dim = "#6A5A88", track = "#3A3150", bg = "#201A2D", inactive = "#15111D" },
 	Bad = { fg = palette.orange, bright = "#F2AE78", dim = "#8E5F3A", track = "#4A3220", bg = "#2A1C10", inactive = "#1C130B" },
 	Off = { fg = "#8C8C8C", bright = "#B4B4B4", dim = "#555555", track = "#333333", bg = "#1C1C1C", inactive = "#121212" },
+	Limit = { fg = "#E06C75", bright = "#F0959C", dim = "#8E4A4F", track = "#4A2428", bg = "#2C1519", inactive = "#1E1012" },
 }) do
 	vim.api.nvim_set_hl(0, "Card" .. kind, { fg = c.fg })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Current", { fg = c.bright, bold = true })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Detail", { fg = c.dim })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Strong", { fg = c.fg, bold = true })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Emph", { fg = c.fg, italic = true })
+	vim.api.nvim_set_hl(0, "Card" .. kind .. "Alert", { fg = c.bright, bold = true, underline = true })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Track", { fg = c.track })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "Bg", { bg = c.bg })
 	vim.api.nvim_set_hl(0, "Card" .. kind .. "BgInactive", { bg = c.inactive })

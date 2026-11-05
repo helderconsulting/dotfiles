@@ -107,6 +107,18 @@ end
 
 Workspace.view_roles = { "sidebar", "conversation", "docker" }
 
+function Workspace.fit(want, room, keep, least)
+	local size = math.min(want, room - 1 - (keep or 1))
+	if size < (least or 1) then
+		return nil
+	end
+	return size
+end
+
+function Workspace.keeps(w, role, pane)
+	return w ~= nil and pane ~= nil and w.panes ~= nil and w.panes[role] == pane
+end
+
 function Workspace:contains(path)
 	local root = self.root or ""
 	return root ~= "" and (path == root or path:sub(1, #root + 1) == root .. "/")

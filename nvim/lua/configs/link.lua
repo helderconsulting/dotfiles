@@ -140,9 +140,7 @@ function M.terminal(win, session, command, on_close)
 	job = vim.fn.jobstart({ "claude", "attach", short(session) }, {
 		term = true,
 		on_exit = vim.schedule_wrap(function()
-			if vim.api.nvim_buf_is_valid(buf) then
-				vim.api.nvim_buf_delete(buf, { force = true })
-			end
+			require("configs.bufs").wipe(buf)
 			on_close()
 		end),
 	})

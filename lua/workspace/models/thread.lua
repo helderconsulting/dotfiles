@@ -1,6 +1,7 @@
 local format = require("workspace.format")
 local Transcript = require("workspace.models.transcript")
 local Turn = require("workspace.models.turn")
+local Review = require("workspace.models.review")
 
 local Thread = {}
 Thread.__index = Thread
@@ -8,11 +9,11 @@ Thread.__index = Thread
 local review_labels = {
 	sent = { "review", "bad" },
 	resolved = { "resolved", "ok" },
-	ready = { "ready for review", "ok" },
-	approved = { "approved", "ok" },
+	ready = Review.words.ready,
+	approved = Review.words.approved,
 }
 
-local event_words = { ready = "ready for review", approved = "approved" }
+local event_words = { ready = Review.words.ready[1], approved = Review.words.approved[1] }
 local from_agent = { resolved = true, ready = true }
 
 function Thread.new(opts)

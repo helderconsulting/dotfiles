@@ -17,13 +17,14 @@ local states = {
 	starting = s.purple,
 	working = s.purple,
 	waiting = s.orange,
+	limited = s.red,
 	message = s.red,
 	done = s.green,
 	idle = s.idle,
 	stopped = s.grey,
 }
 
-local kinds = { ok = s.green, busy = s.purple, bad = s.orange, off = s.grey }
+local kinds = { ok = s.green, busy = s.purple, bad = s.orange, off = s.grey, limit = s.red }
 
 local modes = {
 	insert = s.purple,
