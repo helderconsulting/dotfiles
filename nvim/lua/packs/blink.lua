@@ -34,7 +34,7 @@ require("blink.cmp").setup({
 	sources = {
 		default = { "lsp", "path", "snippets", "buffer" },
 		providers = {
-			claude = { name = "claude", module = "configs.claude_source", score_offset = 10 },
+			claude = { name = "claude", module = "workspace.conversations.presentation.nvim.command_source", score_offset = 10 },
 		},
 	},
 	cmdline = {
@@ -46,7 +46,7 @@ require("blink.cmp").setup({
 				return { "buffer" }
 			end
 			if type == ":" then
-				return require("configs.app").role == "conversation" and { "claude", "cmdline" } or { "cmdline" }
+				return require("workspace.workbench.presentation.nvim.app").role == "conversation" and { "claude", "cmdline" } or { "cmdline" }
 			end
 			return {}
 		end,

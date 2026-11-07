@@ -1,0 +1,3 @@
+#!/bin/sh
+PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+exec nvim --clean --headless -l "$HOME/.config/lua/workspace/conversations/infrastructure/inbound/todo_guard.lua"

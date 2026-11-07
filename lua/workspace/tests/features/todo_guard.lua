@@ -1,0 +1,86 @@
+local mandatum_request = require("workspace.conversations.domain.mandatum_request")
+
+return function(t)
+	local test, check = t.test, t.check
+
+	local guard = vim.fs.normalize(vim.fn.expand("~/.config/wezterm/bin/todo-guard"))
+
+	local function asks(command)
+		local input = vim.json.encode({ tool_input = { command = command } })
+		local out = vim.system({ guard }, { stdin = input, text = true }):wait()
+		return out.code == 0 and out.stdout:find('"ask"', 1, true) ~= nil
+	end
+
+	test("todo-guard: a quoted mention of todo add asks nothing", function()
+		check("the report that triggered it", not asks('legio report "Servius, 5788: todo-guard greps the whole command for todo add, so this report asked the commander"'))
+		check("a legio report with a dollar sign in the quote", not asks('legio report "run todo add with $HOME set"'))
+		check("a legio report", not asks('legio report "Servius: the guard asked on todo add"'))
+		check("single quotes", not asks("legio report 'then mandatum add later'"))
+		check("escaped quotes inside", not asks('legio report "he said \\"todo add\\" twice"'))
+		check("a message across lines", not asks('legio report "first\ntodo add second"'))
+		check("an unrelated command", not asks("git status"))
+	end)
+
+	test("todo-guard: a command that adds a mandatum asks", function()
+		check("todo add", asks('todo add "t" --description d'))
+		check("mandatum add", asks('mandatum add "t"'))
+		check("after cd", asks('cd /x && todo add "t"'))
+		check("with -C", asks('mandatum -C /x add "t"'))
+		check("after a newline", asks('echo hi\ntodo add "t"'))
+		check("through a shell string", asks('bash -c "todo add x"'))
+		check("through a shell string with other flags", asks('bash -e -c "todo add x"'))
+		check("after a pipe", asks('echo t | todo add "t"'))
+		check("behind env", asks('env todo add "t"'))
+		check("behind command and exec", asks('command todo add "t"') and asks('exec mandatum add "t"'))
+		check("behind xargs", asks('echo t | xargs todo add'))
+		check("inside backticks", asks('echo `todo add "t"`'))
+		check("with the command word quoted", asks('"todo" add "t"'))
+	end)
+
+	test("todo-guard: the words actually run decide", function()
+		local adds = mandatum_request.adds
+		check("a real add", adds('todo add "t"'))
+		check("an add after cd", adds('cd /x && todo add "t"'))
+		check("an add through rtk", adds('rtk todo add "t"'))
+		check("an add by the installed path", adds(os.getenv("HOME") .. '/.config/wezterm/bin/todo add "t"'))
+		check("todo show is not an add", not adds("todo show 5788"))
+		check("todo done with 'add' in its note is not an add", not adds('todo done 5788 "did todo add"'))
+		check("an argument named todo is not an add", not adds("echo todo add"))
+		check("nothing is not an add", not adds(nil) and not adds(""))
+	end)
+	test("todo-guard: quoted or escaped mentions of an add stay quiet", function()
+		local adds = mandatum_request.adds
+		check("a dollar escaped in double quotes is literal", not adds('legio report "cost \\$5 for todo add"'))
+		check("an escaped backtick is literal", not adds("echo \\`todo add x\\`"))
+		check("grep for the words", not adds('grep "todo add" lua/file.lua'))
+		check("git log grep for the words", not adds('git log --grep "mandatum add"'))
+		check("a report piped to head", not adds('legio report "x" 2>&1 | head -3'))
+		check("a quoted add behind a pipe", not adds("echo 'todo add' | head -2"))
+		check("the word todo before add in a file name", not adds("cat todo/add.md"))
+	end)
+
+	test("todo-guard: real adds that use dollar, backticks, wrappers or pipes into a shell ask", function()
+		local adds = mandatum_request.adds
+		check("command substitution inside double quotes runs the add", adds('echo "$(todo add x)"'))
+		check("backticks around an add run it", adds("echo `todo add x`"))
+		check("a legio report that runs an add in $() runs it", adds('legio report "run $(todo add y)"'))
+		check("a double-quoted shell string with an escaped dollar still runs the add", adds('bash -c "todo add \\$HOME"'))
+		check("an ANSI-C quoted shell string runs the add", adds("bash -c $'todo add x'"))
+		check("a variable assignment before the add runs it", adds("FOO=1 todo add x"))
+		check("env, command, nohup in front of the add run it", adds("env todo add x") and adds("command todo add x") and adds("nohup todo add x"))
+		check("a piped echo into bash runs the add", adds('echo "todo add" | bash'))
+		check("rtk proxy runs the add raw", adds("rtk proxy todo add x"))
+	end)
+
+	test("todo-guard: the wrapper asks for the command substitution case too", function()
+		local guard = vim.fs.normalize(vim.fn.expand("~/.config/wezterm/bin/todo-guard"))
+		local input = vim.json.encode({ tool_input = { command = 'legio report "run $(todo add y)"' } })
+		local out = vim.system({ guard }, { stdin = input, text = true }):wait()
+		check("the wrapper asks", out.code == 0 and out.stdout:find('"ask"', 1, true) ~= nil, out.stdout)
+	end)
+	test("todo-guard: a heredoc whose body mentions todo add stays quiet", function()
+		local adds = mandatum_request.adds
+		check("a heredoc body is data, not a command", not adds("cat <<'EOF'\nrun todo add t\nEOF"))
+		check("a python heredoc that writes a test mentioning todo add", not adds("python3 - <<'EOF'\nx = 'echo t | todo add \"t\"'\nEOF"))
+	end)
+end

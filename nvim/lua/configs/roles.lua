@@ -1,27 +1,27 @@
-local role = require("configs.app").role
+local role = require("workspace.workbench.presentation.nvim.app").role
 
 local roles = {
 	editor = {
-		modules = { "configs.review" },
+		modules = { "workspace.workflow.presentation.nvim.review_marks" },
 		packs = { "packs.fzf", "packs.oil", "packs.whichkey", "packs.paste" },
 		later = { "packs.git", "packs.dap", "packs.rustacean", "packs.neotest" },
 		mason = true,
 	},
 	sidebar = {
-		modules = { "configs.lifeline" },
+		modules = { "workspace.workbench.presentation.nvim.lifeline" },
 		packs = { "packs.whichkey" },
-		start = "configs.sidebar",
+		start = "workspace.workbench.presentation.nvim.sidebar",
 	},
 	conversation = {
-		modules = { "configs.review", "configs.lifeline" },
+		modules = { "workspace.workflow.presentation.nvim.review_marks", "workspace.workbench.presentation.nvim.lifeline" },
 		packs = { "packs.whichkey" },
-		start = "configs.conversation",
+		start = "workspace.conversations.presentation.nvim.conversation_pane",
 	},
 	docker = {
-		modules = { "configs.lifeline" },
+		modules = { "workspace.workbench.presentation.nvim.lifeline" },
 		packs = { "packs.whichkey" },
 		later = { "packs.git" },
-		start = "configs.docker",
+		start = "workspace.infra.presentation.nvim.infra_panel",
 	},
 }
 

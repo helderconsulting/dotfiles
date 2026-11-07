@@ -42,7 +42,7 @@ local function buffers()
 end
 
 local function review()
-	local ok, mod = pcall(require, "configs.review")
+	local ok, mod = pcall(require, "workspace.workflow.presentation.nvim.review_marks")
 	return ok and vim.t.git_view_root and mod.summary(vim.t.git_view_root) or nil
 end
 

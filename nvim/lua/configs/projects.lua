@@ -75,7 +75,7 @@ vim.keymap.set("n", "<leader>pn", ":ProjectNew<cr>", { desc = "new project" })
 vim.api.nvim_create_autocmd("VimEnter", {
 	group = vim.api.nvim_create_augroup("ProjectsStart", { clear = true }),
 	callback = function()
-		if require("configs.app").role ~= "editor" or vim.fn.argc() ~= 0 or vim.api.nvim_buf_get_name(0) ~= "" then
+		if require("workspace.workbench.presentation.nvim.app").role ~= "editor" or vim.fn.argc() ~= 0 or vim.api.nvim_buf_get_name(0) ~= "" then
 			return
 		end
 		-- Inside a repo, start on the live diff of the working tree; elsewhere pick a project.

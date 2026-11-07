@@ -1,5 +1,5 @@
 require("configs.settings")
-if require("configs.app").role ~= "editor" then
+if require("workspace.workbench.presentation.nvim.app").role ~= "editor" then
 	vim.o.shadafile = "NONE"
 end
 require("configs.keymaps")

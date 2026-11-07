@@ -1,3 +1,4 @@
+local ConversationScreen = require("workspace.conversations.presentation.conversation_screen")
 vim.keymap.set("n", "Q", "<nop>")
 vim.keymap.set({ "n" }, "<C-space>i", vim.lsp.buf.hover, { desc = "more info" })
 vim.keymap.set({ "n" }, "<C-space>d", vim.diagnostic.open_float, { desc = "show diagnostics" })
@@ -26,7 +27,7 @@ end, { desc = "show code actions" })
 vim.keymap.set("n", "<leader>W", ":wa<cr>", { desc = "save all" })
 vim.keymap.set("n", "<leader>w", ":w<cr>", { desc = "save file" })
 local function hand_off(direction)
-	require("configs.app").hand_off(direction)
+	require("workspace.workbench.presentation.nvim.app").hand_off(direction)
 end
 
 -- Listed file buffers of the current project, in the order the WezTerm bar shows them
@@ -144,10 +145,11 @@ vim.keymap.set("n", "<M-Up>", move("k", "Up"), { desc = "move to window above" }
 vim.keymap.set("n", "<M-Down>", move("j", "Down"), { desc = "move to window below" })
 
 vim.keymap.set("n", "<leader>m", function()
-	local app = require("configs.app")
-	local agent = app.agent(app.view().agent)
-	if not agent then
+	local app = require("workspace.workbench.presentation.nvim.app")
+	local id = app.screen(ConversationScreen).agent
+	local dto = id and app.services().roster:get(id)
+	if not dto then
 		return vim.notify("no agent selected in this workspace", vim.log.levels.WARN)
 	end
-	require("configs.drafts").compose({ agent = agent.id, cwd = agent.root, name = agent:display_name() })
+	require("workspace.conversations.presentation.nvim.drafts").compose({ agent = dto.id, cwd = dto.root, name = dto.name })
 end, { desc = "message the followed agent" })

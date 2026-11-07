@@ -30,8 +30,12 @@ end
 
 config.keys = {
 	{ mods = "CTRL|ALT", key = "d", action = wezterm.action.CloseCurrentPane({ confirm = true }) },
-	{ mods = "CTRL|ALT", key = "h", action = wezterm.action.SplitHorizontal({ domain = "CurrentPaneDomain" }) },
-	{ mods = "CTRL|ALT", key = "v", action = wezterm.action.SplitVertical({ domain = "CurrentPaneDomain" }) },
+	{ mods = "CTRL|ALT", key = "h", action = wezterm.action_callback(function(window, pane)
+		require("workspace.workbench.presentation.wezterm.actions").split(window, pane, "Right")
+	end) },
+	{ mods = "CTRL|ALT", key = "v", action = wezterm.action_callback(function(window, pane)
+		require("workspace.workbench.presentation.wezterm.actions").split(window, pane, "Bottom")
+	end) },
 	{ mods = "CTRL|ALT", key = "n", action = navigate("Left", "Prev") },
 	{ mods = "CTRL|ALT", key = "i", action = navigate("Right", "Next") },
 	{ mods = "CTRL|ALT", key = "e", action = navigate("Up", "Prev") },
@@ -66,6 +70,8 @@ table.insert(config.keys, {
 	}),
 })
 
-require("workspaces").apply(config)
+package.path = wezterm.config_dir .. "/../lua/?.lua;" .. wezterm.config_dir .. "/../lua/?/init.lua;" .. package.path
+require("workspace.workbench.presentation.wezterm.state").use(require("workspace.workbench.infrastructure.inbound.wezterm_runtime"))
+require("workspace.workbench.presentation.wezterm").apply(config)
 
 return config

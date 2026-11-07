@@ -28,11 +28,11 @@ if ok_codediff then
 	local function with_comments(format)
 		return function(ctx)
 			local row = format(ctx)
-			local seen = vim.t.git_view_root and require("configs.diff_progress").badge(vim.t.git_view_root, ctx.path)
+			local seen = vim.t.git_view_root and require("workspace.workflow.presentation.nvim.diff_progress").badge(vim.t.git_view_root, ctx.path)
 			if seen then
 				table.insert(row.right, 1, { segments = { { text = seen[1] .. " ", hl = seen_marks[seen[2]] } }, truncate_priority = 5 })
 			end
-			local ok, review = pcall(require, "configs.review")
+			local ok, review = pcall(require, "workspace.workflow.presentation.nvim.review_marks")
 			local n = ok and vim.t.git_view_root and review.file_counts(vim.t.git_view_root)[ctx.path]
 			if n then
 				local segments = {}
@@ -58,7 +58,7 @@ if ok_codediff then
 		-- Hunks run on into the next file and stop at the ends, so ALT up / down can step through all
 		-- changes and leave Neovim past the first or last one (configs/keymaps.lua).
 		diff = {
-			layout = require("workspace.models.workspace").diff_layout(vim.o.columns),
+			layout = require("workspace.workbench.presentation.nvim.app").services().workspace_process:diff_layout(vim.o.columns),
 			cycle_hunks_across_files = true,
 			cycle_next_hunk = false,
 			cycle_next_file = false,
@@ -71,7 +71,7 @@ if ok_codediff then
 				file = with_comments(oil_icons(formatters.file)),
 				folder = oil_icons(formatters.folder),
 			},
-			width = require("workspace.models.workspace").panel_width(vim.o.columns),
+			width = require("workspace.workbench.presentation.nvim.app").services().workspace_process:panel_width(vim.o.columns),
 			initial_focus = "modified",
 			focus_on_select = true,
 		},
@@ -119,14 +119,14 @@ if ok_codediff then
 	local render = require("codediff.ui.view.render")
 	local scrollbind = render.establish_scrollbind
 	render.establish_scrollbind = function(orig_win, mod_win, orig_buf, mod_buf, lines_diff, orig_cursor, mod_cursor)
-		orig_cursor, mod_cursor = require("configs.diff_progress").landing(mod_win, lines_diff, orig_cursor, mod_cursor)
+		orig_cursor, mod_cursor = require("workspace.workflow.presentation.nvim.diff_progress").landing(mod_win, lines_diff, orig_cursor, mod_cursor)
 		scrollbind(orig_win, mod_win, orig_buf, mod_buf, lines_diff, orig_cursor, mod_cursor)
 		wrap(orig_win)
 		wrap(mod_win)
 	end
 	local function track(tabpage)
 		vim.schedule(function()
-			local ok, err = pcall(require("configs.diff_progress").rendered, tabpage)
+			local ok, err = pcall(require("workspace.workflow.presentation.nvim.diff_progress").rendered, tabpage)
 			if not ok then
 				vim.notify_once("diff progress: " .. tostring(err), vim.log.levels.WARN)
 			end
@@ -151,7 +151,7 @@ if ok_codediff then
 		local result = render_inline(...)
 		local win = select(7, ...)
 		wrap(win)
-		require("configs.diff_progress").land_inline(win)
+		require("workspace.workflow.presentation.nvim.diff_progress").land_inline(win)
 		return result
 	end
 end
@@ -362,7 +362,7 @@ vim.api.nvim_create_autocmd("User", {
 			vim.t[tab].git_view, vim.t[tab].git_view_root = "codediff", session.git_root
 			vim.t[tab].git_view_branch = opening_branch
 			M.refresh_info(tab)
-			require("configs.diff_progress").restore(tab, session.git_root, M.show_in_diff)
+			require("workspace.workflow.presentation.nvim.diff_progress").restore(tab, session.git_root, M.show_in_diff)
 		end
 	end,
 })
@@ -370,14 +370,14 @@ vim.api.nvim_create_autocmd("CursorMoved", {
 	group = group,
 	callback = function()
 		if vim.t.git_view == "codediff" then
-			require("configs.diff_progress").moved()
+			require("workspace.workflow.presentation.nvim.diff_progress").moved()
 		end
 	end,
 })
 vim.api.nvim_create_autocmd("VimLeavePre", {
 	group = group,
 	callback = function()
-		require("configs.diff_progress").flush()
+		require("workspace.workflow.presentation.nvim.diff_progress").flush()
 	end,
 })
 -- Recorded once the status buffer is shown: its filetype is set before Neogit opens its tab.
@@ -542,11 +542,16 @@ vim.api.nvim_create_autocmd("TabEnter", {
 	end,
 })
 
-local app = require("configs.app")
-local followed, revealed
+local app = require("workspace.workbench.presentation.nvim.app")
+local ConversationScreen = require("workspace.conversations.presentation.conversation_screen")
+local followed
 
-local function follow_agent(id)
-	local agent = app.agent(id)
+local function miles_view(id)
+	return id and app.services().roster:get(id) or nil
+end
+
+local function follow_miles(id)
+	local agent = miles_view(id)
 	local root = agent and agent.root
 	if root and root ~= followed and vim.fn.isdirectory(root) == 1 then
 		followed = root
@@ -555,21 +560,16 @@ local function follow_agent(id)
 end
 
 if app.role == "editor" and app.workspace then
-	app.on("agents", function(change)
-		if change.model and change.id == app.view().agent then
-			follow_agent(change.id)
+	app.on("milites", function(change)
+		if change.record and change.id == app.screen(ConversationScreen).agent then
+			follow_miles(change.id)
 		end
 	end)
-	app.on("views", function(change)
+	app.on("conversation_screens", function(change)
 		if change.id ~= app.workspace or not change.model then
 			return
 		end
-		follow_agent(change.model.agent)
-		local reveal = change.model.reveal
-		if reveal and reveal.at ~= revealed then
-			revealed = reveal.at
-			require("configs.review").reveal(reveal)
-		end
+		follow_miles(change.model.agent)
 	end)
 end
 
@@ -588,9 +588,9 @@ vim.keymap.set("n", "<leader>gw", function()
 			list[#list].branch = line:match("^branch refs/heads/(.+)$") or line == "detached" and "detached" or list[#list].branch
 		end
 	end
-	local function agent_in(root)
-		for _, a in ipairs(app.agents()) do
-			if a:is_running() and same_path(a.root, root) then
+	local function miles_in(root)
+		for _, a in ipairs(app.services().roster:all()) do
+			if a.running and same_path(a.root, root) then
 				return a
 			end
 		end
@@ -598,17 +598,17 @@ vim.keymap.set("n", "<leader>gw", function()
 	vim.ui.select(list, {
 		prompt = "worktree",
 		format_item = function(wt)
-			local agent = agent_in(wt.root)
-			return ("%s %-24s %s%s"):format(same_path(wt.root, here) and "●" or " ", wt.branch, vim.fn.fnamemodify(wt.root, ":~"), agent and ("  " .. agent:display_name() .. " " .. agent:status()) or "")
+			local agent = miles_in(wt.root)
+			return ("%s %-24s %s%s"):format(same_path(wt.root, here) and "●" or " ", wt.branch, vim.fn.fnamemodify(wt.root, ":~"), agent and ("  " .. agent.name .. " " .. agent.state) or "")
 		end,
 	}, function(wt)
 		if not wt then
 			return
 		end
 		go_to(wt.root)
-		local agent = agent_in(wt.root)
+		local agent = miles_in(wt.root)
 		if agent then
-			app.update_view(function(v)
+			app.update_screen(ConversationScreen, function(v)
 				v:select(agent.id)
 			end)
 		end
@@ -795,7 +795,7 @@ vim.api.nvim_create_autocmd("User", {
 	group = group,
 	pattern = "CodeDiffClose",
 	callback = function(ev)
-		require("configs.diff_progress").closed(ev.data and ev.data.tabpage)
+		require("workspace.workflow.presentation.nvim.diff_progress").closed(ev.data and ev.data.tabpage)
 		vim.schedule(function()
 			local buf = vim.api.nvim_get_current_buf()
 			local empty = vim.api.nvim_buf_get_name(buf) == "" and vim.bo[buf].buftype == ""

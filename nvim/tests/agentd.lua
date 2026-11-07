@@ -7,7 +7,8 @@ vim.env.XDG_STATE_HOME = state
 vim.env.WORKSPACE_ID = "test"
 vim.env.WORKSPACE_ROLE = "conversation"
 
-local app = require("configs.app")
+local app = require("workspace.workbench.presentation.nvim.app")
+local AgentdStatus = require("workspace.legio.domain.agentd_status")
 local socket = app.paths.root .. "/agentd.sock"
 vim.fn.mkdir(app.paths.root, "p")
 
@@ -29,7 +30,7 @@ local function wait(cond, ms)
 end
 
 local function health()
-	local d = app.store():get(app.models.Daemon, app.models.Daemon.id)
+	local d = app.store():get(AgentdStatus, AgentdStatus.id)
 	return d and d.state, d and d.reason
 end
 
@@ -39,10 +40,10 @@ local function fresh()
 	if current then
 		current.stop_holding()
 	end
-	package.loaded["configs.agentd"] = nil
-	app.store():remove(app.models.Daemon, app.models.Daemon.id)
+	package.loaded["workspace.legio.infrastructure.outbound.agentd_client"] = nil
+	app.store():remove(AgentdStatus, AgentdStatus.id)
 	notes = {}
-	local agentd = require("configs.agentd")
+	local agentd = require("workspace.legio.infrastructure.outbound.agentd_client")
 	agentd.installed = function()
 		return true
 	end

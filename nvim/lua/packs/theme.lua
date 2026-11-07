@@ -79,6 +79,7 @@ local highlights = {
 	CardCursor = { fg = "#0F2A0F", bg = "#0F2A0F" },
 	CardMarked = { fg = palette.purple },
 	CardUnread = { fg = palette.orange, bold = true },
+	CardLead = { fg = "#E2C26B", bold = true },
 	CardMarkedBg = { bg = "#15111D" },
 	-- Window separators match WezTerm's split lines and agent bar edges.
 	WinSeparator = { fg = "#223022" },

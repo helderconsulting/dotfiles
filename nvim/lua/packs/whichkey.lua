@@ -57,7 +57,7 @@ require("which-key").setup({
 	-- In the docker view only its own actions (configs/docker.lua), not the editor's; in the
 	-- conversation view (configs/conversation.lua) its own and the review comment keys.
 	filter = function(mapping)
-		local role = require("configs.app").role
+		local role = require("workspace.workbench.presentation.nvim.app").role
 		if role == "conversation" then
 			if vim.b.draft then
 				return (mapping.buffer or 0) ~= 0
